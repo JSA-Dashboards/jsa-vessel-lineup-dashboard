@@ -1,0 +1,691 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+from datetime import datetime
+import os
+import io
+
+# ── JSA Brand Colors ─────────────────────────────────────────────────────────
+JSA_GREEN    = "#5e7164"
+JSA_GREEN_LT = "#8db89a"
+
+DM_BG       = "#0d1210"
+DM_SURFACE  = "#141c18"
+DM_SURFACE2 = "#1a2620"
+DM_BORDER   = "#253328"
+DM_TEXT     = "#e8ede9"
+DM_MUTED    = "#7a9485"
+
+COL_POS  = "#8db89a"
+COL_NEG  = "#e07070"
+COL_AMB  = "#c4b456"
+COL_BLUE = "#6fa8c4"
+COL_PURP = "#9b89c4"
+COL_ORG  = "#c4896a"
+COL_TEAL = "#6ac4b8"
+
+JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+
+LOCAL_FILE_PATH = (
+    r"C:\Users\KoltenPostin\John Stewart and Associates"
+    r"\JSA - Documents\Research Analyst\Misc\Boat Lineup\Vessel Lineup - US.xlsx"
+)
+
+# Commodity color map (shared across US + UKR)
+COMM_COLORS = {
+    "Corn":          COL_AMB,
+    "Wheat":         "#e8c96a",
+    "Soybeans/Meal": COL_POS,
+    "Sorghum":       COL_ORG,
+    "Dist. Grains":  COL_PURP,
+    "Rice":          "#c46a8d",
+    "Barley":        "#a8c46a",
+    "Sunflower":     "#e8b96a",
+    "Rapeseed":      COL_TEAL,
+    "Sugar":         "#c46aaa",
+    "Other":         "#5a6660",
+}
+
+REGION_COLORS = {
+    "USG": COL_BLUE,
+    "PNW": COL_POS,
+    "TXG": COL_AMB,
+    "UKR": COL_PURP,
+}
+
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="JSA Vessel Lineup",
+    page_icon="🚢",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(f"""
+<style>
+/* ── Base ── */
+.stApp {{ background-color: {DM_BG}; color: {DM_TEXT}; }}
+.block-container {{ padding: 1.2rem 2rem 2rem 2rem; }}
+h1, h2, h3, h4 {{ color: {DM_TEXT}; }}
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {{
+    background-color: {DM_SURFACE};
+    border-right: 1px solid {DM_BORDER};
+}}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown {{ color: {DM_MUTED}; }}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {{
+    background: {DM_SURFACE};
+    border-radius: 8px;
+    padding: 4px 6px;
+    gap: 4px;
+    border: 1px solid {DM_BORDER};
+}}
+.stTabs [data-baseweb="tab"] {{
+    background: transparent;
+    color: {DM_MUTED};
+    border-radius: 6px;
+    font-weight: 500;
+}}
+.stTabs [aria-selected="true"] {{
+    background: {JSA_GREEN} !important;
+    color: {DM_TEXT} !important;
+}}
+
+/* ── KPI cards ── */
+.kpi-wrap {{
+    background: {DM_SURFACE};
+    border: 1px solid {DM_BORDER};
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 6px;
+}}
+.kpi-label {{
+    font-size: 10px;
+    font-weight: 600;
+    color: {DM_MUTED};
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+}}
+.kpi-value {{
+    font-size: 26px;
+    font-weight: 700;
+    color: {DM_TEXT};
+    line-height: 1.1;
+    margin: 0;
+}}
+.kpi-sub {{
+    font-size: 11px;
+    color: {DM_MUTED};
+    margin-top: 2px;
+}}
+
+/* ── Section headers ── */
+.sec-hdr {{
+    font-size: 11px;
+    font-weight: 700;
+    color: {DM_MUTED};
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    border-bottom: 1px solid {DM_BORDER};
+    padding-bottom: 6px;
+    margin: 22px 0 14px 0;
+}}
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {{ border-radius: 6px; overflow: hidden; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def kpi(col, label, value, sub="", accent=JSA_GREEN):
+    col.markdown(
+        f'<div class="kpi-wrap" style="border-left:3px solid {accent};">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'<div class="kpi-sub">{sub}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+BASE_LAYOUT = dict(
+    plot_bgcolor=DM_SURFACE2,
+    paper_bgcolor=DM_SURFACE,
+    font=dict(color=DM_MUTED, family="Arial"),
+    xaxis=dict(gridcolor=DM_BORDER, linecolor=DM_BORDER, tickfont=dict(color=DM_MUTED)),
+    yaxis=dict(gridcolor=DM_BORDER, linecolor=DM_BORDER, tickfont=dict(color=DM_MUTED)),
+    legend=dict(bgcolor=DM_SURFACE2, bordercolor=DM_BORDER, borderwidth=1,
+                font=dict(color=DM_TEXT)),
+    margin=dict(l=10, r=10, t=36, b=10),
+    title_font=dict(size=12, color=DM_MUTED),
+    title_x=0,
+)
+
+
+def sec(label):
+    st.markdown(f'<div class="sec-hdr">{label}</div>', unsafe_allow_html=True)
+
+
+# ── Commodity normalisation ───────────────────────────────────────────────────
+
+def _comm_us(c):
+    if pd.isna(c):
+        return "Other"
+    c = str(c).upper()
+    if "CORN" in c:
+        return "Corn"
+    if any(x in c for x in ("SBM", "YSB", "SOY", "CANOLA")):
+        return "Soybeans/Meal"
+    if "WHT" in c or "WHEAT" in c:
+        return "Wheat"
+    if "SORGHUM" in c:
+        return "Sorghum"
+    if any(x in c for x in ("DDGS", "CGM", "CGFP", "GDDG")):
+        return "Dist. Grains"
+    if "RICE" in c:
+        return "Rice"
+    return "Other"
+
+
+def _comm_ukr(c):
+    if pd.isna(c):
+        return "Other"
+    c = str(c).lower()
+    if "corn" in c:
+        return "Corn"
+    if any(x in c for x in ("soybean", "soymeal")):
+        return "Soybeans/Meal"
+    if "wheat" in c or "bran" in c:
+        return "Wheat"
+    if "barley" in c:
+        return "Barley"
+    if any(x in c for x in ("sunoil", "sunmeal", "sunseed", "sunflower")):
+        return "Sunflower"
+    if "rape" in c:
+        return "Rapeseed"
+    if "sugar" in c:
+        return "Sugar"
+    return "Other"
+
+
+# ── Data loading & processing ─────────────────────────────────────────────────
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_data(file_source):
+    """Load data from a file path (str) or file-like object (uploaded bytes)."""
+    US_COLS = ["ELEVATOR", "VESSEL", "ATA", "STATUS", "MT",
+               "COMMODITY", "DESTINATION", "SAIL DATE"]
+
+    frames = {}
+    for region in ("USG", "PNW", "TXG"):
+        df = pd.read_excel(file_source, sheet_name=region,
+                           usecols=list(range(8)), header=0)
+        df.columns = US_COLS
+        df = df.dropna(how="all")
+        df["REGION"] = region
+
+        # MT  — keep RVT flag, convert to numeric kMT
+        df["IS_RVT"] = df["MT"].astype(str).str.strip().str.upper() == "RVT"
+        df["MT_kMT"] = pd.to_numeric(df["MT"], errors="coerce")
+
+        # Status normalisation
+        def _stat(s):
+            if pd.isna(s):
+                return "Unknown"
+            s = str(s).strip().upper()
+            if s.startswith("SAIL"):
+                return "Sailed"
+            if s in ("LOADING", "PART-LDD", "IN PORT"):
+                return "Loading/In Port"
+            if s == "FILED":
+                return "Filed"
+            if s.startswith("ETA") or s.startswith("L/R"):
+                return "ETA"
+            return "Other"
+
+        df["STATUS_NORM"] = df["STATUS"].apply(_stat)
+        df["SAILED"] = df["STATUS_NORM"] == "Sailed"
+        df["COMM_GRP"] = df["COMMODITY"].apply(_comm_us)
+
+        df["ATA"] = pd.to_datetime(df["ATA"], errors="coerce")
+        df["SAIL_DT"] = pd.to_datetime(df["SAIL DATE"], errors="coerce")
+        df["SAIL_MONTH"] = df["SAIL_DT"].dt.to_period("M").dt.to_timestamp()
+
+        frames[region] = df
+
+    # ── UKR ──────────────────────────────────────────────────────────────────
+    ukr = pd.read_excel(file_source, sheet_name="UKR",
+                        usecols=list(range(12)), header=0)
+    ukr = ukr.dropna(how="all")
+    ukr["REGION"] = "UKR"
+    ukr["SAILED"] = ukr["STATUS"].astype(str).str.strip().str.lower() == "sailed"
+    ukr["STATUS_NORM"] = ukr["SAILED"].map({True: "Sailed", False: "ETA"})
+    ukr["COMM_GRP"] = ukr["CARGO"].apply(_comm_ukr)
+    ukr["BL_DT"] = pd.to_datetime(ukr["B/L DATE"], errors="coerce")
+    ukr["SAIL_MONTH"] = ukr["BL_DT"].dt.to_period("M").dt.to_timestamp()
+    ukr["MT_kMT"] = pd.to_numeric(ukr["QUANTITY"], errors="coerce") / 1000
+    ukr["IS_RVT"] = False
+    # Unify column names used by render functions
+    ukr["ELEVATOR"] = ukr["LOAD-PORT"].fillna("Unknown")
+    ukr["COMMODITY"] = ukr["CARGO"]
+    frames["UKR"] = ukr
+
+    return frames
+
+
+def _cutoff(months):
+    return pd.Timestamp.now().normalize() - pd.DateOffset(months=months)
+
+
+# ── Shared chart builders ─────────────────────────────────────────────────────
+
+def bar_comm(df, title):
+    """Vessel count bar by commodity group."""
+    g = (df.groupby("COMM_GRP").size()
+           .reset_index(name="Vessels")
+           .sort_values("Vessels", ascending=False))
+    fig = px.bar(g, x="COMM_GRP", y="Vessels",
+                 color="COMM_GRP", color_discrete_map=COMM_COLORS,
+                 title=title, labels={"COMM_GRP": "Commodity"})
+    fig.update_layout(**BASE_LAYOUT, showlegend=False)
+    fig.update_traces(marker_line_width=0)
+    return fig
+
+
+def bar_monthly_stacked(df, title, color_col="COMM_GRP"):
+    """Stacked bar: month × commodity or region."""
+    cmap = COMM_COLORS if color_col == "COMM_GRP" else REGION_COLORS
+    lbl = "Commodity" if color_col == "COMM_GRP" else "Region"
+    g = (df.groupby(["SAIL_MONTH", color_col]).size()
+           .reset_index(name="Vessels")
+           .sort_values("SAIL_MONTH"))
+    fig = px.bar(g, x="SAIL_MONTH", y="Vessels",
+                 color=color_col, color_discrete_map=cmap,
+                 barmode="stack", title=title,
+                 labels={"SAIL_MONTH": "Month", color_col: lbl})
+    fig.update_layout(**BASE_LAYOUT)
+    fig.update_xaxes(tickformat="%b %Y")
+    fig.update_traces(marker_line_width=0)
+    return fig
+
+
+def pivot_comm_month(df):
+    """Commodity × Month pivot table for shipped vessels."""
+    p = (df.groupby(["COMM_GRP", "SAIL_MONTH"]).size()
+           .unstack(fill_value=0))
+    p.columns = [c.strftime("%b %Y") if hasattr(c, "strftime") else str(c)
+                 for c in p.columns]
+    p["Total"] = p.sum(axis=1)
+    return p.sort_values("Total", ascending=False)
+
+
+# ── Per-region page (US) ──────────────────────────────────────────────────────
+
+def page_us(df, region_label, n_months):
+    lined = df[~df["SAILED"]].copy()
+    sailed = df[df["SAILED"] & (df["SAIL_MONTH"] >= _cutoff(n_months))].copy()
+
+    # ── KPI row ──────────────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+
+    lu_mt = lined["MT_kMT"].sum()
+    s_mt = sailed["MT_kMT"].sum()
+
+    top_lu = (lined["COMM_GRP"].value_counts().index[0]
+              if len(lined) > 0 else "—")
+    top_lu_n = (lined["COMM_GRP"].value_counts().iloc[0]
+                if len(lined) > 0 else 0)
+    top_s = (sailed["COMM_GRP"].value_counts().index[0]
+             if len(sailed) > 0 else "—")
+    top_s_n = (sailed["COMM_GRP"].value_counts().iloc[0]
+               if len(sailed) > 0 else 0)
+
+    kpi(c1, "Vessels Lined Up", f"{len(lined):,}",
+        f"{lu_mt:,.0f} kMT known" if lu_mt > 0 else "MT not disclosed",
+        COL_BLUE)
+    kpi(c2, "Top Commodity (Lined Up)", top_lu,
+        f"{top_lu_n} vessels", COL_AMB)
+    kpi(c3, f"Vessels Sailed — last {n_months}mo", f"{len(sailed):,}",
+        f"{s_mt:,.0f} kMT", COL_POS)
+    kpi(c4, "Top Commodity (Sailed)", top_s,
+        f"{top_s_n} vessels", COL_PURP)
+
+    st.markdown("---")
+
+    # ── Current Lineup ────────────────────────────────────────────────────────
+    sec("🟡  Current Lineup — Vessels Waiting to Ship")
+
+    if len(lined) == 0:
+        st.info("No vessels currently in the lineup.")
+    else:
+        ch, tb = st.columns([1.5, 1])
+        with ch:
+            st.plotly_chart(bar_comm(lined, "Vessel Count by Commodity"),
+                            use_container_width=True)
+        with tb:
+            st.markdown("<br>", unsafe_allow_html=True)
+            piv = (lined.groupby(["COMM_GRP", "STATUS_NORM"])
+                        .size().unstack(fill_value=0))
+            piv["Total"] = piv.sum(axis=1)
+            st.dataframe(piv.sort_values("Total", ascending=False),
+                         use_container_width=True)
+
+        with st.expander("📋 Full Lineup Detail"):
+            cols = [c for c in
+                    ["ELEVATOR", "VESSEL", "ATA", "STATUS", "COMMODITY",
+                     "COMM_GRP", "MT", "DESTINATION"]
+                    if c in lined.columns]
+            st.dataframe(
+                lined[cols].sort_values("ATA", na_position="last"),
+                use_container_width=True, height=320,
+            )
+
+    st.markdown("---")
+
+    # ── Shipped by Month ──────────────────────────────────────────────────────
+    sec("✅  Shipped — Departed Vessels by Month")
+
+    if len(sailed) == 0:
+        st.info("No sailed vessel data for this period.")
+        return
+
+    st.plotly_chart(
+        bar_monthly_stacked(sailed, "Shipped Vessels by Month & Commodity"),
+        use_container_width=True,
+    )
+    st.dataframe(pivot_comm_month(sailed), use_container_width=True)
+
+    # Volume bar
+    mv = (sailed.groupby("SAIL_MONTH")["MT_kMT"].sum().reset_index())
+    fig_v = px.bar(mv.sort_values("SAIL_MONTH"), x="SAIL_MONTH", y="MT_kMT",
+                   title="Shipped Volume by Month (kMT — excludes RVT)",
+                   labels={"SAIL_MONTH": "Month", "MT_kMT": "kMT"},
+                   color_discrete_sequence=[JSA_GREEN_LT])
+    fig_v.update_layout(**BASE_LAYOUT)
+    fig_v.update_xaxes(tickformat="%b %Y")
+    fig_v.update_traces(marker_line_width=0)
+    st.plotly_chart(fig_v, use_container_width=True)
+
+
+# ── UKR page ──────────────────────────────────────────────────────────────────
+
+def page_ukr(df, n_months):
+    lined = df[~df["SAILED"]].copy()
+    sailed = df[df["SAILED"] & (df["SAIL_MONTH"] >= _cutoff(n_months))].copy()
+
+    c1, c2, c3, c4 = st.columns(4)
+    lu_mt = lined["MT_kMT"].sum()
+    s_mt = sailed["MT_kMT"].sum()
+    top_lu = lined["COMM_GRP"].value_counts().index[0] if len(lined) > 0 else "—"
+    top_lu_n = lined["COMM_GRP"].value_counts().iloc[0] if len(lined) > 0 else 0
+    top_s = sailed["COMM_GRP"].value_counts().index[0] if len(sailed) > 0 else "—"
+    top_s_n = sailed["COMM_GRP"].value_counts().iloc[0] if len(sailed) > 0 else 0
+
+    kpi(c1, "Vessels with ETA (Lined Up)", f"{len(lined):,}",
+        f"{lu_mt:,.0f} kMT", COL_PURP)
+    kpi(c2, "Top Cargo (Lined Up)", top_lu,
+        f"{top_lu_n} vessels", COL_AMB)
+    kpi(c3, f"Vessels Sailed — last {n_months}mo", f"{len(sailed):,}",
+        f"{s_mt:,.0f} kMT", COL_POS)
+    kpi(c4, "Top Cargo (Sailed)", top_s,
+        f"{top_s_n} vessels", COL_BLUE)
+
+    st.markdown("---")
+
+    # ── Current Lineup ────────────────────────────────────────────────────────
+    sec("🟡  Current Lineup — Vessels with ETA (Ukraine)")
+
+    if len(lined) == 0:
+        st.info("No vessels currently in the lineup.")
+    else:
+        ch, tb = st.columns([1.5, 1])
+        with ch:
+            st.plotly_chart(bar_comm(lined, "Vessel Count by Cargo Type"),
+                            use_container_width=True)
+        with tb:
+            st.markdown("<br>", unsafe_allow_html=True)
+            piv = (lined.groupby(["ELEVATOR", "COMM_GRP"])
+                        .size().unstack(fill_value=0))
+            piv["Total"] = piv.sum(axis=1)
+            st.dataframe(piv.sort_values("Total", ascending=False),
+                         use_container_width=True)
+
+        with st.expander("📋 Full Lineup Detail"):
+            cols = [c for c in
+                    ["VESSEL", "CARGO", "COMM_GRP", "QUANTITY",
+                     "SHIPPER", "LOAD-PORT", "TERMINAL", "DESTINATION"]
+                    if c in lined.columns]
+            st.dataframe(lined[cols], use_container_width=True, height=320)
+
+    st.markdown("---")
+
+    # ── Shipped ───────────────────────────────────────────────────────────────
+    sec("✅  Shipped — Departed Vessels by Month (B/L Date)")
+
+    if len(sailed) == 0:
+        st.info("No sailed vessel data for this period.")
+        return
+
+    st.plotly_chart(
+        bar_monthly_stacked(sailed, "Shipped Vessels by Month & Cargo"),
+        use_container_width=True,
+    )
+    st.dataframe(pivot_comm_month(sailed), use_container_width=True)
+
+    # Top shippers
+    sec("Top Shippers (Sailed Period)")
+    top_ship = (sailed.groupby(["SHIPPER", "COMM_GRP"]).size()
+                      .reset_index(name="Vessels")
+                      .sort_values("Vessels", ascending=False).head(20))
+    fig_s = px.bar(top_ship, x="Vessels", y="SHIPPER",
+                   color="COMM_GRP", color_discrete_map=COMM_COLORS,
+                   orientation="h", title="Top Shippers by Vessel Count",
+                   labels={"COMM_GRP": "Cargo"})
+    fig_s.update_layout(**BASE_LAYOUT, height=420)
+    fig_s.update_traces(marker_line_width=0)
+    st.plotly_chart(fig_s, use_container_width=True)
+
+
+# ── Summary page ──────────────────────────────────────────────────────────────
+
+def page_summary(frames, n_months):
+    cut = _cutoff(n_months)
+
+    rows = []
+    for r, df in frames.items():
+        lu = df[~df["SAILED"]]
+        s = df[df["SAILED"] & (df["SAIL_MONTH"] >= cut)]
+        rows.append(dict(Region=r,
+                         Lined_Up=len(lu), LU_MT=lu["MT_kMT"].sum(),
+                         Sailed=len(s), S_MT=s["MT_kMT"].sum()))
+    smry = pd.DataFrame(rows)
+
+    # ── KPI row ──────────────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    kpi(c1, "Total Vessels Lined Up",
+        f"{smry['Lined_Up'].sum():,}",
+        "all regions combined", COL_BLUE)
+    kpi(c2, "Total Vessels Sailed",
+        f"{smry['Sailed'].sum():,}",
+        f"last {n_months} months", COL_POS)
+    kpi(c3, "Volume Lined Up",
+        f"{smry['LU_MT'].sum():,.0f} kMT",
+        "known MT (excl. RVT)", COL_AMB)
+    kpi(c4, "Volume Sailed",
+        f"{smry['S_MT'].sum():,.0f} kMT",
+        f"last {n_months} months", COL_PURP)
+
+    st.markdown("---")
+
+    # ── Lineup by region ──────────────────────────────────────────────────────
+    sec("🟡  Current Lineup — All Regions")
+
+    lu_all = pd.concat(
+        [df[~df["SAILED"]] for df in frames.values()], ignore_index=True
+    )
+
+    ch1, ch2 = st.columns(2)
+    with ch1:
+        g = (lu_all.groupby(["REGION", "COMM_GRP"]).size()
+                   .reset_index(name="Vessels"))
+        fig = px.bar(g, x="REGION", y="Vessels",
+                     color="COMM_GRP", color_discrete_map=COMM_COLORS,
+                     barmode="stack", title="Lined-Up Vessels by Region & Commodity",
+                     category_orders={"REGION": ["USG", "PNW", "TXG", "UKR"]},
+                     labels={"REGION": "Region", "COMM_GRP": "Commodity"})
+        fig.update_layout(**BASE_LAYOUT)
+        fig.update_traces(marker_line_width=0)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with ch2:
+        g2 = (lu_all.groupby(["COMM_GRP", "REGION"]).size()
+                    .reset_index(name="Vessels"))
+        fig2 = px.bar(g2, x="COMM_GRP", y="Vessels",
+                      color="REGION", color_discrete_map=REGION_COLORS,
+                      barmode="stack", title="Lined-Up Vessels by Commodity & Region",
+                      labels={"COMM_GRP": "Commodity", "REGION": "Region"})
+        fig2.update_layout(**BASE_LAYOUT)
+        fig2.update_traces(marker_line_width=0)
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # Summary table
+    st.dataframe(
+        smry.rename(columns=dict(
+            Lined_Up="Lined Up", LU_MT="Lined Up kMT",
+            Sailed=f"Sailed ({n_months}mo)", S_MT="Sailed kMT"
+        )).set_index("Region"),
+        use_container_width=True,
+    )
+
+    st.markdown("---")
+
+    # ── Shipped all regions ───────────────────────────────────────────────────
+    sec("✅  Shipped — All Regions by Month")
+
+    s_all = pd.concat(
+        [df[df["SAILED"] & (df["SAIL_MONTH"] >= cut)] for df in frames.values()],
+        ignore_index=True,
+    )
+
+    if len(s_all) == 0:
+        st.info("No sailed vessel data for the selected period.")
+        return
+
+    ch3, ch4 = st.columns(2)
+    with ch3:
+        st.plotly_chart(
+            bar_monthly_stacked(s_all,
+                                "Shipped Vessels by Month & Region",
+                                color_col="REGION"),
+            use_container_width=True,
+        )
+    with ch4:
+        st.plotly_chart(
+            bar_monthly_stacked(s_all,
+                                "Shipped Vessels by Month & Commodity"),
+            use_container_width=True,
+        )
+
+    # Region × Month table
+    reg_month = (s_all.groupby(["REGION", "SAIL_MONTH"]).size()
+                      .unstack(fill_value=0))
+    reg_month.columns = [c.strftime("%b %Y") if hasattr(c, "strftime") else str(c)
+                         for c in reg_month.columns]
+    reg_month["Total"] = reg_month.sum(axis=1)
+    st.dataframe(reg_month, use_container_width=True)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    # ── Sidebar ───────────────────────────────────────────────────────────────
+    with st.sidebar:
+        try:
+            st.image(JSA_LOGO, width=150)
+        except Exception:
+            st.markdown("## JPSI")
+
+        st.markdown("## 🚢 Vessel Lineup")
+        st.markdown("---")
+
+        n_months = st.slider(
+            "Shipped History Window",
+            min_value=3, max_value=24, value=12, step=1,
+            help="Number of months of sailed history to display",
+        )
+        st.markdown("---")
+
+        # ── File source: local path or upload ────────────────────────────────
+        local_available = os.path.exists(LOCAL_FILE_PATH)
+        if local_available:
+            file_source = LOCAL_FILE_PATH
+            st.caption("📂 Local file loaded automatically")
+        else:
+            st.markdown("**Upload Data File**")
+            uploaded = st.file_uploader(
+                "Vessel Lineup - US.xlsx",
+                type=["xlsx"],
+                help="Upload the Vessel Lineup Excel file to load the dashboard",
+            )
+            if uploaded is None:
+                st.warning("Upload the Vessel Lineup Excel file to continue.")
+                st.stop()
+            file_source = io.BytesIO(uploaded.read())
+
+        st.markdown("---")
+
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.markdown("---")
+        st.caption("Source: Vessel Lineup - US.xlsx")
+        st.caption(f"Updated: {datetime.now().strftime('%b %d, %Y')}")
+
+    # ── Load ──────────────────────────────────────────────────────────────────
+    with st.spinner("Loading vessel data..."):
+        frames = load_data(file_source)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(
+        "<h1 style='margin-bottom:2px;'>🚢 Vessel Lineup Dashboard</h1>"
+        f"<p style='color:{DM_MUTED}; margin-top:0; margin-bottom:18px;'>"
+        "US Gulf &nbsp;·&nbsp; Pacific Northwest &nbsp;·&nbsp; "
+        "Texas Gulf &nbsp;·&nbsp; Ukraine</p>",
+        unsafe_allow_html=True,
+    )
+
+    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🌻 UKR"])
+
+    with tabs[0]:
+        page_summary(frames, n_months)
+
+    with tabs[1]:
+        st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
+        page_us(frames["USG"], "USG", n_months)
+
+    with tabs[2]:
+        st.markdown("<h2>Pacific Northwest &nbsp;(PNW)</h2>", unsafe_allow_html=True)
+        page_us(frames["PNW"], "PNW", n_months)
+
+    with tabs[3]:
+        st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
+        page_us(frames["TXG"], "TXG", n_months)
+
+    with tabs[4]:
+        st.markdown("<h2>Ukraine &nbsp;(UKR)</h2>", unsafe_allow_html=True)
+        page_ukr(frames["UKR"], n_months)
+
+
+if __name__ == "__main__":
+    main()
