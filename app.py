@@ -220,9 +220,11 @@ def _comm_ukr(c):
 
 # ── Data loading & processing ─────────────────────────────────────────────────
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_data(file_source):
-    """Load data from a file path (str) or file-like object (uploaded bytes)."""
+@st.cache_data(show_spinner=False)
+def load_data(file_source, _mtime=None):
+    """Load data from a file path (str) or file-like object (uploaded bytes).
+    _mtime is passed for local files so the cache auto-busts when the file changes.
+    """
     US_COLS = ["ELEVATOR", "VESSEL", "ATA", "STATUS", "MT",
                "COMMODITY", "DESTINATION", "SAIL DATE"]
 
@@ -627,9 +629,17 @@ def main():
 
         # ── File source: local path or upload ────────────────────────────────
         local_available = os.path.exists(LOCAL_FILE_PATH)
+        file_mtime = None
+
         if local_available:
+            try:
+                file_mtime = os.path.getmtime(LOCAL_FILE_PATH)
+                mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
+            except Exception:
+                mod_str = "Unknown"
             file_source = LOCAL_FILE_PATH
-            st.caption("📂 Local file loaded automatically")
+            st.caption(f"📂 Auto-loading from OneDrive")
+            st.caption(f"File saved: {mod_str}")
         else:
             st.markdown("**Upload Data File**")
             uploaded = st.file_uploader(
@@ -644,17 +654,28 @@ def main():
 
         st.markdown("---")
 
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Reload Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
         st.markdown("---")
-        st.caption("Source: Vessel Lineup - US.xlsx")
-        st.caption(f"Updated: {datetime.now().strftime('%b %d, %Y')}")
+        st.caption(f"Loaded: {datetime.now().strftime('%b %d · %I:%M %p')}")
 
     # ── Load ──────────────────────────────────────────────────────────────────
     with st.spinner("Loading vessel data..."):
-        frames = load_data(file_source)
+        frames = load_data(file_source, _mtime=file_mtime)
+
+    # ── Stale-data banner (local only) ────────────────────────────────────────
+    # If the file on disk is newer than what's in cache, prompt a reload.
+    if local_available and file_mtime is not None:
+        cached_mtime = st.session_state.get("cached_mtime")
+        if cached_mtime is not None and file_mtime > cached_mtime:
+            st.warning(
+                "⚠️ The source file has been updated since last load. "
+                "Click **Reload Data** in the sidebar to refresh.",
+                icon="🔄",
+            )
+        st.session_state["cached_mtime"] = file_mtime
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
