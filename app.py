@@ -218,6 +218,15 @@ def _comm_ukr(c):
     return "Other"
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _reader(file_source):
+    """Return a pandas-compatible file source (path str or fresh BytesIO)."""
+    if isinstance(file_source, bytes):
+        return io.BytesIO(file_source)
+    return file_source   # str path — pandas opens directly
+
+
 # ── Data loading & processing ─────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
@@ -283,6 +292,87 @@ def load_data(file_source, _mtime=None):
     frames["UKR"] = ukr
 
     return frames
+
+
+@st.cache_data(show_spinner=False)
+def load_trends_snapshot(file_source, _mtime=None):
+    """
+    Parse the Trends sheet for commodity-level MT, weekly change, and monthly change
+    for USG, PNW, and TXG.  Returns:
+      {region: DataFrame[COMMODITY, MT, Weekly_MT, Monthly_MT]}
+      and the latest snapshot date.
+    """
+    df = pd.read_excel(_reader(file_source), sheet_name="Trends", header=None)
+
+    # Row 0 has dates in cols 1-N then 'Weekly', 'Monthly', etc.
+    header_row = df.iloc[0]
+    weekly_col = monthly_col = latest_col = None
+    latest_date = None
+    for ci, val in enumerate(header_row):
+        ci = int(ci)
+        if isinstance(val, str):
+            v = val.strip()
+            if v == "Weekly":
+                weekly_col = ci
+            elif v == "Monthly":
+                monthly_col = ci
+        elif hasattr(val, "year") and hasattr(val, "month"):  # datetime or Timestamp
+            val_ts = pd.Timestamp(val)
+            if latest_date is None or val_ts > latest_date:
+                latest_date = val_ts
+                latest_col = ci
+
+    # Region sections are identified by scanning for region-header rows.
+    # A region-header row has col[0] == region name AND col[latest_col] is NaN or a Timestamp.
+    # The "Commodity" row follows, then commodity data rows, then a total row where
+    # col[0] == region name AND col[latest_col] is numeric.
+    TARGETS = {"USG", "PNW", "TXG"}
+
+    def _float(v):
+        if pd.isna(v):
+            return 0.0
+        if isinstance(v, (int, float)):
+            return float(v)
+        try:
+            return float(v)
+        except Exception:
+            return 0.0
+
+    regions = {}
+    i = 0
+    while i < len(df):
+        cell = str(df.iloc[i, 0]).strip() if pd.notna(df.iloc[i, 0]) else ""
+        if cell in TARGETS:
+            region = cell
+            latest_val = df.iloc[i, latest_col] if latest_col else None
+            # Check if this is the header row (latest_col has a date or NaN, not a number)
+            if not isinstance(latest_val, (int, float)):
+                rows = []
+                i += 1  # advance past region header
+                # Skip "Commodity" label row
+                if i < len(df) and str(df.iloc[i, 0]).strip() == "Commodity":
+                    i += 1
+                # Read commodity rows until we hit the total row (col[0] == region)
+                while i < len(df):
+                    label = str(df.iloc[i, 0]).strip() if pd.notna(df.iloc[i, 0]) else ""
+                    if label == region:
+                        # This is the total row — skip it (we'll sum ourselves)
+                        i += 1
+                        break
+                    if label and label != "nan":
+                        rows.append({
+                            "COMMODITY": label.upper(),
+                            "MT": _float(df.iloc[i, latest_col]) if latest_col else 0.0,
+                            "Weekly_MT": _float(df.iloc[i, weekly_col]) if weekly_col else 0.0,
+                            "Monthly_MT": _float(df.iloc[i, monthly_col]) if monthly_col else 0.0,
+                        })
+                    i += 1
+                if rows:
+                    regions[region] = pd.DataFrame(rows)
+                continue
+        i += 1
+
+    return regions, latest_date
 
 
 def _cutoff(months):
@@ -498,9 +588,161 @@ def page_ukr(df, n_months):
     st.plotly_chart(fig_s, use_container_width=True)
 
 
+# ── Snapshot table helpers ───────────────────────────────────────────────────
+
+def _fmt_change(val):
+    """Format a numeric change with leading + for positives."""
+    if pd.isna(val) or val == 0:
+        return "0"
+    return f"+{val:,.0f}" if val > 0 else f"{val:,.0f}"
+
+
+def _color_val(val):
+    """Pandas Styler cell function — green positive, red negative."""
+    if not isinstance(val, (int, float)):
+        return ""
+    if val > 0:
+        return f"color: {COL_POS}; background-color: #182d1e; font-weight:600"
+    if val < 0:
+        return f"color: {COL_NEG}; background-color: #2d1818; font-weight:600"
+    return f"color: {DM_MUTED}"
+
+
+def _current_table(lined_up_df, trends_df):
+    """
+    Build the 'current lineup' table: vessel count from live tabs,
+    MT from Trends latest.  Returns a display-ready DataFrame.
+    """
+    # Vessel counts from live lineup
+    vc = (
+        lined_up_df.groupby("COMMODITY")
+        .size()
+        .reset_index(name="Vessels")
+    )
+    vc["COMMODITY"] = vc["COMMODITY"].str.upper().str.strip()
+
+    # MT from Trends (most recent snapshot)
+    if trends_df is not None and not trends_df.empty:
+        mt = trends_df[["COMMODITY", "MT"]].copy()
+    else:
+        # Fall back to live MT
+        mt = (
+            lined_up_df.groupby("COMMODITY")["MT_kMT"]
+            .sum()
+            .reset_index()
+            .rename(columns={"COMMODITY": "COMMODITY", "MT_kMT": "MT"})
+        )
+        mt["COMMODITY"] = mt["COMMODITY"].str.upper().str.strip()
+
+    merged = vc.merge(mt, on="COMMODITY", how="left").fillna({"MT": 0})
+    merged["MT"] = merged["MT"].round(0).astype(int)
+
+    # Total row
+    total = pd.DataFrame(
+        [{"COMMODITY": "Grand Total",
+          "Vessels": merged["Vessels"].sum(),
+          "MT": merged["MT"].sum()}]
+    )
+    out = pd.concat([merged, total], ignore_index=True)
+    return out.set_index("COMMODITY")
+
+
+def _change_table(trends_df, col):
+    """Build a weekly or monthly MT-change table from the Trends data."""
+    if trends_df is None or trends_df.empty:
+        return pd.DataFrame()
+    t = trends_df[["COMMODITY", col]].copy()
+    t = t.rename(columns={col: "MT Δ (kMT)"})
+    total = pd.DataFrame(
+        [{"COMMODITY": "Total", "MT Δ (kMT)": t["MT Δ (kMT)"].sum()}]
+    )
+    t = pd.concat([t, total], ignore_index=True).set_index("COMMODITY")
+    return t
+
+
+def render_snapshot_section(frames, trends_regions, latest_date):
+    """Render the 3×3 commodity snapshot grid on the Summary page."""
+    date_str = latest_date.strftime("%m/%d/%Y") if latest_date else "latest"
+    sec(f"📋  Commodity Snapshot — Lineup as of {date_str}")
+
+    REGION_LABELS = {
+        "USG": "🇺🇸 US Gulf",
+        "PNW": "🌲 Pacific Northwest",
+        "TXG": "⭐ Texas Gulf",
+    }
+
+    for region in ("USG", "PNW", "TXG"):
+        lined = frames.get(region)
+        trends = trends_regions.get(region) if trends_regions else None
+        label = REGION_LABELS[region]
+
+        st.markdown(
+            f"<div style='font-size:14px; font-weight:700; color:{DM_TEXT}; "
+            f"margin:14px 0 6px 0;'>{label}</div>",
+            unsafe_allow_html=True,
+        )
+
+        col_cur, col_wk, col_mo = st.columns(3)
+
+        # ── Current Lineup ────────────────────────────────────────────────────
+        with col_cur:
+            st.markdown(
+                f"<div style='font-size:11px; font-weight:600; color:{DM_MUTED}; "
+                f"text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px;'>"
+                f"Current Lineup</div>",
+                unsafe_allow_html=True,
+            )
+            if lined is not None and len(lined[~lined["SAILED"]]) > 0:
+                cur_df = _current_table(lined[~lined["SAILED"]], trends)
+                # Bold the Grand Total row via styler
+                def bold_total(row):
+                    return ["font-weight:bold" if row.name == "Grand Total" else "" for _ in row]
+                styled_cur = cur_df.style.apply(bold_total, axis=1)
+                st.dataframe(styled_cur, use_container_width=True)
+            else:
+                st.info("No vessels lined up.")
+
+        # ── Weekly MT Change ──────────────────────────────────────────────────
+        with col_wk:
+            st.markdown(
+                f"<div style='font-size:11px; font-weight:600; color:{DM_MUTED}; "
+                f"text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px;'>"
+                f"Weekly MT Change</div>",
+                unsafe_allow_html=True,
+            )
+            wk = _change_table(trends, "Weekly_MT")
+            if not wk.empty:
+                # Format values with +/- prefix then style
+                wk_fmt = wk.copy()
+                wk_fmt["MT Δ (kMT)"] = wk_fmt["MT Δ (kMT)"].apply(
+                    lambda v: _fmt_change(v) if isinstance(v, (int, float)) else v
+                )
+                styled_wk = wk.style.map(_color_val)
+                st.dataframe(styled_wk, use_container_width=True)
+            else:
+                st.info("No Trends data.")
+
+        # ── Monthly MT Change ─────────────────────────────────────────────────
+        with col_mo:
+            st.markdown(
+                f"<div style='font-size:11px; font-weight:600; color:{DM_MUTED}; "
+                f"text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px;'>"
+                f"Monthly MT Change</div>",
+                unsafe_allow_html=True,
+            )
+            mo = _change_table(trends, "Monthly_MT")
+            if not mo.empty:
+                styled_mo = mo.style.map(_color_val)
+                st.dataframe(styled_mo, use_container_width=True)
+            else:
+                st.info("No Trends data.")
+
+    st.markdown("---")
+
+
 # ── Summary page ──────────────────────────────────────────────────────────────
 
-def page_summary(frames, n_months):
+def page_summary(frames, n_months, trends_regions=None, latest_date=None):
     cut = _cutoff(n_months)
 
     rows = []
@@ -528,6 +770,10 @@ def page_summary(frames, n_months):
         f"last {n_months} months", COL_PURP)
 
     st.markdown("---")
+
+    # ── Commodity snapshot tables ─────────────────────────────────────────────
+    if trends_regions:
+        render_snapshot_section(frames, trends_regions, latest_date)
 
     # ── Lineup by region ──────────────────────────────────────────────────────
     sec("🟡  Current Lineup — All Regions")
@@ -664,6 +910,7 @@ def main():
     # ── Load ──────────────────────────────────────────────────────────────────
     with st.spinner("Loading vessel data..."):
         frames = load_data(file_source, _mtime=file_mtime)
+        trends_regions, latest_date = load_trends_snapshot(file_source, _mtime=file_mtime)
 
     # ── Stale-data banner (local only) ────────────────────────────────────────
     # If the file on disk is newer than what's in cache, prompt a reload.
@@ -689,7 +936,7 @@ def main():
     tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🌻 UKR"])
 
     with tabs[0]:
-        page_summary(frames, n_months)
+        page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
 
     with tabs[1]:
         st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
