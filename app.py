@@ -28,7 +28,15 @@ COL_TEAL = "#6ac4b8"
 
 JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
-LOCAL_FILE_PATH = (
+DATA_FILENAME = "Vessel Lineup - US.xlsx"
+
+# Search order:
+#   1. Same folder as app.py  (repo copy — works on Streamlit Cloud + locally)
+#   2. Original OneDrive source path  (local fallback if repo copy is stale)
+#   3. File uploader widget  (last resort)
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_FILE_PATH = os.path.join(_APP_DIR, DATA_FILENAME)
+ONEDRIVE_FILE_PATH = (
     r"C:\Users\KoltenPostin\John Stewart and Associates"
     r"\JSA - Documents\Research Analyst\Misc\Boat Lineup\Vessel Lineup - US.xlsx"
 )
@@ -878,23 +886,39 @@ def main():
         )
         st.markdown("---")
 
-        # ── File source: local path or upload ────────────────────────────────
-        local_available = os.path.exists(LOCAL_FILE_PATH)
+        # ── File source priority ──────────────────────────────────────────────
+        # 1. Repo copy (same folder as app.py) — works on Streamlit Cloud + local
+        # 2. Original OneDrive source path — local fallback
+        # 3. File uploader — last resort
         file_mtime = None
 
-        if local_available:
+        if os.path.exists(REPO_FILE_PATH):
+            file_source = REPO_FILE_PATH
             try:
-                file_mtime = os.path.getmtime(LOCAL_FILE_PATH)
+                file_mtime = os.path.getmtime(REPO_FILE_PATH)
                 mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
             except Exception:
                 mod_str = "Unknown"
-            file_source = LOCAL_FILE_PATH
-            st.caption(f"📂 Auto-loading from OneDrive")
+            st.caption(f"📂 {DATA_FILENAME}")
             st.caption(f"File saved: {mod_str}")
+            local_available = True
+
+        elif os.path.exists(ONEDRIVE_FILE_PATH):
+            file_source = ONEDRIVE_FILE_PATH
+            try:
+                file_mtime = os.path.getmtime(ONEDRIVE_FILE_PATH)
+                mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
+            except Exception:
+                mod_str = "Unknown"
+            st.caption(f"📂 OneDrive source")
+            st.caption(f"File saved: {mod_str}")
+            local_available = True
+
         else:
+            local_available = False
             st.markdown("**Upload Data File**")
             uploaded = st.file_uploader(
-                "Vessel Lineup - US.xlsx",
+                DATA_FILENAME,
                 type=["xlsx"],
                 help="Upload the Vessel Lineup Excel file to load the dashboard",
             )

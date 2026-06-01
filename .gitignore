@@ -8,5 +8,5 @@ venv/
 .DS_Store
 Thumbs.db
 .claude/
-*.xlsx
-*.xls
+# *.xlsx and *.xls are intentionally NOT ignored
+# — Vessel Lineup - US.xlsx is committed to the repo
