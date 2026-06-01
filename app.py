@@ -45,6 +45,7 @@ COMM_COLORS = {
     "Sunflower":     "#e8b96a",
     "Rapeseed":      COL_TEAL,
     "Sugar":         "#c46aaa",
+    "Mixed Cargo":   COL_BLUE,   # combo loads (e.g. CORN/SBM, CORN/WHT/YSB)
     "Other":         "#5a6660",
 }
 
@@ -181,8 +182,12 @@ def sec(label):
 def _comm_us(c):
     if pd.isna(c):
         return "Other"
-    c = str(c).upper()
-    if "CORN" in c:
+    c = str(c).strip().upper()
+    # Combo loads (e.g. CORN/SBM, CORN/WHT/YSB) — vessel carries multiple
+    # commodities so we don't attribute it to any single one.
+    if "/" in c:
+        return "Mixed Cargo"
+    if c == "CORN" or c.startswith("CORN "):
         return "Corn"
     if any(x in c for x in ("SBM", "YSB", "SOY", "CANOLA")):
         return "Soybeans/Meal"
