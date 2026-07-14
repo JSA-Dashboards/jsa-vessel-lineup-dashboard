@@ -41,7 +41,7 @@ ONEDRIVE_FILE_PATH = (
     r"\JSA - Documents\Research Analyst\Misc\Boat Lineup\Vessel Lineup - US.xlsx"
 )
 
-# Commodity color map (shared across US + UKR)
+# Commodity color map
 COMM_COLORS = {
     "Corn":          COL_AMB,
     "Wheat":         "#e8c96a",
@@ -49,10 +49,6 @@ COMM_COLORS = {
     "Sorghum":       COL_ORG,
     "Dist. Grains":  COL_PURP,
     "Rice":          "#c46a8d",
-    "Barley":        "#a8c46a",
-    "Sunflower":     "#e8b96a",
-    "Rapeseed":      COL_TEAL,
-    "Sugar":         "#c46aaa",
     "Mixed Cargo":   COL_BLUE,   # combo loads (e.g. CORN/SBM, CORN/WHT/YSB)
     "Other":         "#5a6660",
 }
@@ -61,7 +57,6 @@ REGION_COLORS = {
     "USG": COL_BLUE,
     "PNW": COL_POS,
     "TXG": COL_AMB,
-    "UKR": COL_PURP,
 }
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -210,27 +205,6 @@ def _comm_us(c):
     return "Other"
 
 
-def _comm_ukr(c):
-    if pd.isna(c):
-        return "Other"
-    c = str(c).lower()
-    if "corn" in c:
-        return "Corn"
-    if any(x in c for x in ("soybean", "soymeal")):
-        return "Soybeans/Meal"
-    if "wheat" in c or "bran" in c:
-        return "Wheat"
-    if "barley" in c:
-        return "Barley"
-    if any(x in c for x in ("sunoil", "sunmeal", "sunseed", "sunflower")):
-        return "Sunflower"
-    if "rape" in c:
-        return "Rapeseed"
-    if "sugar" in c:
-        return "Sugar"
-    return "Other"
-
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _reader(file_source):
@@ -286,23 +260,6 @@ def load_data(file_source, _mtime=None):
         df["SAIL_MONTH"] = df["SAIL_DT"].dt.to_period("M").dt.to_timestamp()
 
         frames[region] = df
-
-    # ── UKR ──────────────────────────────────────────────────────────────────
-    ukr = pd.read_excel(file_source, sheet_name="UKR",
-                        usecols=list(range(12)), header=0)
-    ukr = ukr.dropna(how="all")
-    ukr["REGION"] = "UKR"
-    ukr["SAILED"] = ukr["STATUS"].astype(str).str.strip().str.lower() == "sailed"
-    ukr["STATUS_NORM"] = ukr["SAILED"].map({True: "Sailed", False: "ETA"})
-    ukr["COMM_GRP"] = ukr["CARGO"].apply(_comm_ukr)
-    ukr["BL_DT"] = pd.to_datetime(ukr["B/L DATE"], errors="coerce")
-    ukr["SAIL_MONTH"] = ukr["BL_DT"].dt.to_period("M").dt.to_timestamp()
-    ukr["MT_kMT"] = pd.to_numeric(ukr["QUANTITY"], errors="coerce") / 1000
-    ukr["IS_RVT"] = False
-    # Unify column names used by render functions
-    ukr["ELEVATOR"] = ukr["LOAD-PORT"].fillna("Unknown")
-    ukr["COMMODITY"] = ukr["CARGO"]
-    frames["UKR"] = ukr
 
     return frames
 
@@ -522,85 +479,6 @@ def page_us(df, region_label, n_months):
     st.plotly_chart(fig_v, use_container_width=True)
 
 
-# ── UKR page ──────────────────────────────────────────────────────────────────
-
-def page_ukr(df, n_months):
-    lined = df[~df["SAILED"]].copy()
-    sailed = df[df["SAILED"] & (df["SAIL_MONTH"] >= _cutoff(n_months))].copy()
-
-    c1, c2, c3, c4 = st.columns(4)
-    lu_mt = lined["MT_kMT"].sum()
-    s_mt = sailed["MT_kMT"].sum()
-    top_lu = lined["COMM_GRP"].value_counts().index[0] if len(lined) > 0 else "—"
-    top_lu_n = lined["COMM_GRP"].value_counts().iloc[0] if len(lined) > 0 else 0
-    top_s = sailed["COMM_GRP"].value_counts().index[0] if len(sailed) > 0 else "—"
-    top_s_n = sailed["COMM_GRP"].value_counts().iloc[0] if len(sailed) > 0 else 0
-
-    kpi(c1, "Vessels with ETA (Lined Up)", f"{len(lined):,}",
-        f"{lu_mt:,.0f} kMT", COL_PURP)
-    kpi(c2, "Top Cargo (Lined Up)", top_lu,
-        f"{top_lu_n} vessels", COL_AMB)
-    kpi(c3, f"Vessels Sailed — last {n_months}mo", f"{len(sailed):,}",
-        f"{s_mt:,.0f} kMT", COL_POS)
-    kpi(c4, "Top Cargo (Sailed)", top_s,
-        f"{top_s_n} vessels", COL_BLUE)
-
-    st.markdown("---")
-
-    # ── Current Lineup ────────────────────────────────────────────────────────
-    sec("🟡  Current Lineup — Vessels with ETA (Ukraine)")
-
-    if len(lined) == 0:
-        st.info("No vessels currently in the lineup.")
-    else:
-        ch, tb = st.columns([1.5, 1])
-        with ch:
-            st.plotly_chart(bar_comm(lined, "Vessel Count by Cargo Type"),
-                            use_container_width=True)
-        with tb:
-            st.markdown("<br>", unsafe_allow_html=True)
-            piv = (lined.groupby(["ELEVATOR", "COMM_GRP"])
-                        .size().unstack(fill_value=0))
-            piv["Total"] = piv.sum(axis=1)
-            st.dataframe(piv.sort_values("Total", ascending=False),
-                         use_container_width=True)
-
-        with st.expander("📋 Full Lineup Detail"):
-            cols = [c for c in
-                    ["VESSEL", "CARGO", "COMM_GRP", "QUANTITY",
-                     "SHIPPER", "LOAD-PORT", "TERMINAL", "DESTINATION"]
-                    if c in lined.columns]
-            st.dataframe(lined[cols], use_container_width=True, height=320)
-
-    st.markdown("---")
-
-    # ── Shipped ───────────────────────────────────────────────────────────────
-    sec("✅  Shipped — Departed Vessels by Month (B/L Date)")
-
-    if len(sailed) == 0:
-        st.info("No sailed vessel data for this period.")
-        return
-
-    st.plotly_chart(
-        bar_monthly_stacked(sailed, "Shipped Vessels by Month & Cargo"),
-        use_container_width=True,
-    )
-    st.dataframe(pivot_comm_month(sailed), use_container_width=True)
-
-    # Top shippers
-    sec("Top Shippers (Sailed Period)")
-    top_ship = (sailed.groupby(["SHIPPER", "COMM_GRP"]).size()
-                      .reset_index(name="Vessels")
-                      .sort_values("Vessels", ascending=False).head(20))
-    fig_s = px.bar(top_ship, x="Vessels", y="SHIPPER",
-                   color="COMM_GRP", color_discrete_map=COMM_COLORS,
-                   orientation="h", title="Top Shippers by Vessel Count",
-                   labels={"COMM_GRP": "Cargo"})
-    fig_s.update_layout(**BASE_LAYOUT, height=420)
-    fig_s.update_traces(marker_line_width=0)
-    st.plotly_chart(fig_s, use_container_width=True)
-
-
 # ── Snapshot table helpers ───────────────────────────────────────────────────
 
 def _fmt_change(val):
@@ -802,7 +680,7 @@ def page_summary(frames, n_months, trends_regions=None, latest_date=None):
         fig = px.bar(g, x="REGION", y="Vessels",
                      color="COMM_GRP", color_discrete_map=COMM_COLORS,
                      barmode="stack", title="Lined-Up Vessels by Region & Commodity",
-                     category_orders={"REGION": ["USG", "PNW", "TXG", "UKR"]},
+                     category_orders={"REGION": ["USG", "PNW", "TXG"]},
                      labels={"REGION": "Region", "COMM_GRP": "Commodity"})
         fig.update_layout(**BASE_LAYOUT)
         fig.update_traces(marker_line_width=0)
@@ -957,12 +835,11 @@ def main():
     st.markdown(
         "<h1 style='margin-bottom:2px;'>🚢 Vessel Lineup Dashboard</h1>"
         f"<p style='color:{DM_MUTED}; margin-top:0; margin-bottom:18px;'>"
-        "US Gulf &nbsp;·&nbsp; Pacific Northwest &nbsp;·&nbsp; "
-        "Texas Gulf &nbsp;·&nbsp; Ukraine</p>",
+        "US Gulf &nbsp;·&nbsp; Pacific Northwest &nbsp;·&nbsp; Texas Gulf</p>",
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🌻 UKR"])
+    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG"])
 
     with tabs[0]:
         page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
@@ -978,10 +855,6 @@ def main():
     with tabs[3]:
         st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
         page_us(frames["TXG"], "TXG", n_months)
-
-    with tabs[4]:
-        st.markdown("<h2>Ukraine &nbsp;(UKR)</h2>", unsafe_allow_html=True)
-        page_ukr(frames["UKR"], n_months)
 
 
 if __name__ == "__main__":
