@@ -585,11 +585,7 @@ def render_snapshot_section(frames, trends_regions, latest_date):
             )
             if lined is not None and len(lined[~lined["SAILED"]]) > 0:
                 cur_df = _current_table(lined[~lined["SAILED"]], trends)
-                # Bold the Grand Total row via styler
-                def bold_total(row):
-                    return ["font-weight:bold" if row.name == "Grand Total" else "" for _ in row]
-                styled_cur = cur_df.style.apply(bold_total, axis=1)
-                st.dataframe(styled_cur, use_container_width=True)
+                st.dataframe(cur_df, use_container_width=True)
             else:
                 st.info("No vessels lined up.")
 
