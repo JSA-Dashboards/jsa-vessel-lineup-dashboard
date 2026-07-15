@@ -488,16 +488,6 @@ def _fmt_change(val):
     return f"+{val:,.0f}" if val > 0 else f"{val:,.0f}"
 
 
-def _color_val(val):
-    """Pandas Styler cell function — green positive, red negative."""
-    if not isinstance(val, (int, float)):
-        return ""
-    if val > 0:
-        return f"color: {COL_POS}; background-color: #182d1e; font-weight:600"
-    if val < 0:
-        return f"color: {COL_NEG}; background-color: #2d1818; font-weight:600"
-    return f"color: {DM_MUTED}"
-
 
 def _current_table(lined_up_df, trends_df):
     """
@@ -599,13 +589,11 @@ def render_snapshot_section(frames, trends_regions, latest_date):
             )
             wk = _change_table(trends, "Weekly_MT")
             if not wk.empty:
-                # Format values with +/- prefix then style
                 wk_fmt = wk.copy()
                 wk_fmt["MT Δ (kMT)"] = wk_fmt["MT Δ (kMT)"].apply(
                     lambda v: _fmt_change(v) if isinstance(v, (int, float)) else v
                 )
-                styled_wk = wk.style.map(_color_val)
-                st.dataframe(styled_wk, use_container_width=True)
+                st.dataframe(wk_fmt, use_container_width=True)
             else:
                 st.info("No Trends data.")
 
@@ -619,8 +607,11 @@ def render_snapshot_section(frames, trends_regions, latest_date):
             )
             mo = _change_table(trends, "Monthly_MT")
             if not mo.empty:
-                styled_mo = mo.style.map(_color_val)
-                st.dataframe(styled_mo, use_container_width=True)
+                mo_fmt = mo.copy()
+                mo_fmt["MT Δ (kMT)"] = mo_fmt["MT Δ (kMT)"].apply(
+                    lambda v: _fmt_change(v) if isinstance(v, (int, float)) else v
+                )
+                st.dataframe(mo_fmt, use_container_width=True)
             else:
                 st.info("No Trends data.")
 
