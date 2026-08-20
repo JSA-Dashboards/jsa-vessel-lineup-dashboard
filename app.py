@@ -843,6 +843,28 @@ def main():
         st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
         page_us(frames["TXG"], "TXG", n_months)
 
+    # ── Disclaimer footer ─────────────────────────────────────────────────────
+    current_year = datetime.now().year
+    st.markdown("---")
+    st.markdown(
+        f"""<div style="font-size:10px; color:{DM_MUTED}; line-height:1.6; padding:8px 0 16px 0;">
+        Trading commodity futures, options on futures, cash commodities, and over-the-counter
+        derivative products involves substantial risk of loss and may not be suitable for all
+        investors. This communication is provided for informational purposes only and does not
+        constitute investment advice, a recommendation, or an offer or solicitation to buy or
+        sell any futures, options, cash commodities, or derivative products. John Stewart &amp;
+        Associates, Inc. does not accept orders to buy or sell any financial instruments via
+        email. The information contained herein has been obtained from sources believed to be
+        reliable; however, its accuracy and completeness are not guaranteed. Any opinions
+        expressed are solely those of the author, are subject to change without notice, and
+        should not be relied upon as a basis for investment decisions. Past performance is not
+        indicative of future results. This message may contain confidential or proprietary
+        information intended solely for the use of the designated recipient.
+        &copy; John Stewart &amp; Associates, Inc. {current_year}
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
 
 if __name__ == "__main__":
     main()
