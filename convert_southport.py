@@ -200,9 +200,12 @@ def convert(southport_path, push=True):
 
 
 def main():
-    # Allow path as CLI arg, otherwise look in Downloads for the latest Southport file
-    if len(sys.argv) > 1:
-        southport_path = sys.argv[1]
+    # Allow path as CLI arg; --no-push skips git (used by droplet poller)
+    args = [a for a in sys.argv[1:] if a != "--no-push"]
+    no_push = "--no-push" in sys.argv[1:]
+
+    if args:
+        southport_path = args[0]
     else:
         downloads = os.path.join(os.path.expanduser("~"), "Downloads")
         candidates = [
@@ -222,8 +225,9 @@ def main():
         southport_path = os.path.join(downloads, candidates[0])
         print(f"Found: {candidates[0]}")
 
-    convert(southport_path, push=True)
-    input("\nPress Enter to exit.")
+    convert(southport_path, push=not no_push)
+    if not no_push:
+        input("\nPress Enter to exit.")
 
 
 if __name__ == "__main__":
