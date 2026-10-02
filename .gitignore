@@ -10,3 +10,9 @@ Thumbs.db
 .claude/
 # *.xlsx and *.xls are intentionally NOT ignored
 # — Vessel Lineup - US.xlsx is committed to the repo
+
+# Droplet runtime files — not committed
+.token_cache.json
+poller_state.json
+poller.log
+*.bak.xlsx
