@@ -115,22 +115,43 @@ def read_region(sp_wb, sort_sheet, sail_sheet, texas=False):
 
 
 def git_push(message):
-    cmds = [
-        ["git", "-C", REPO_DIR, "add",    "Vessel Lineup - US.xlsx"],
+    interactive = sys.stdin.isatty()
+
+    for cmd in [
+        ["git", "-C", REPO_DIR, "add", "Vessel Lineup - US.xlsx"],
         ["git", "-C", REPO_DIR, "commit", "-m", message,
          "--author", "Kolten Postin <275148418+koltenpostin93-blip@users.noreply.github.com>"],
-        ["git", "-C", REPO_DIR, "push"],
-    ]
-    for cmd in cmds:
+    ]:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             if "nothing to commit" in r.stdout + r.stderr:
                 print("  (no changes to commit)")
                 return
-            print(f"ERROR: {' '.join(cmd)}")
-            print(r.stderr or r.stdout)
-            input("\nPress Enter to exit.")
+            print(f"ERROR: {' '.join(cmd)}\n{r.stderr or r.stdout}")
+            if interactive:
+                input("\nPress Enter to exit.")
             sys.exit(1)
+
+    # Push — if remote is ahead, pull --rebase first then retry once
+    for attempt in range(2):
+        r = subprocess.run(["git", "-C", REPO_DIR, "push"], capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+        if attempt == 0 and ("fetch first" in r.stderr or "rejected" in r.stderr):
+            rb = subprocess.run(
+                ["git", "-C", REPO_DIR, "pull", "--rebase"],
+                capture_output=True, text=True,
+            )
+            if rb.returncode != 0:
+                print(f"Pull --rebase failed:\n{rb.stderr}")
+                if interactive:
+                    input("\nPress Enter to exit.")
+                sys.exit(1)
+            continue
+        print(f"ERROR: git push\n{r.stderr or r.stdout}")
+        if interactive:
+            input("\nPress Enter to exit.")
+        sys.exit(1)
 
 
 def convert(southport_path, push=True):
