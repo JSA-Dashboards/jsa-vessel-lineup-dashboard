@@ -63,46 +63,56 @@ def _load_env(env_file=ENV_FILE):
 # Graph auth
 # ---------------------------------------------------------------------------
 
+SCOPES = ["https://graph.microsoft.com/.default"]
+
+
 def _get_access_token():
-    """Acquire token using MSAL with a persistent file cache."""
+    """Acquire token via delegated auth (PublicClientApplication + cached token).
+    Token cache is shared with southport_poller.py; run setup_poller_auth.py once
+    interactively to create it.
+    """
     import msal  # type: ignore
+
+    if not os.path.exists(TOKEN_CACHE):
+        raise RuntimeError(
+            f"Token cache not found: {TOKEN_CACHE}. "
+            "Run setup_poller_auth.py interactively once to create it."
+        )
 
     client_id = os.environ["AZURE_CLIENT_ID"]
     tenant_id = os.environ["GRAPH_TENANT_ID"]
-    # App-only (client_credentials) – needs client_secret or cert
-    client_secret = os.environ.get("AZURE_CLIENT_SECRET", "")
-
     authority = f"https://login.microsoftonline.com/{tenant_id}"
 
     cache = msal.SerializableTokenCache()
-    if os.path.exists(TOKEN_CACHE):
-        try:
-            with open(TOKEN_CACHE) as f:
-                cache.deserialize(f.read())
-        except Exception:
-            pass
+    with open(TOKEN_CACHE) as f:
+        cache.deserialize(f.read())
 
-    app = msal.ConfidentialClientApplication(
+    app = msal.PublicClientApplication(
         client_id,
         authority=authority,
-        client_credential=client_secret,
         token_cache=cache,
     )
-    scopes = ["https://graph.microsoft.com/.default"]
-    result = app.acquire_token_silent(scopes, account=None)
-    if not result:
-        result = app.acquire_token_for_client(scopes=scopes)
+
+    accounts = app.get_accounts()
+    if not accounts:
+        raise RuntimeError(
+            "No accounts in token cache. Run setup_poller_auth.py again."
+        )
+
+    result = app.acquire_token_silent(SCOPES, account=accounts[0])
 
     if cache.has_state_changed:
         try:
-            Path(TOKEN_CACHE).parent.mkdir(parents=True, exist_ok=True)
             with open(TOKEN_CACHE, "w") as f:
                 f.write(cache.serialize())
         except Exception as e:
             log.warning(f"Could not write token cache: {e}")
 
-    if "access_token" not in result:
-        raise RuntimeError(f"Graph auth failed: {result.get('error_description', result)}")
+    if not result or "access_token" not in result:
+        raise RuntimeError(
+            f"Silent token refresh failed: {result}. "
+            "Re-run setup_poller_auth.py to refresh the login."
+        )
     return result["access_token"]
 
 
