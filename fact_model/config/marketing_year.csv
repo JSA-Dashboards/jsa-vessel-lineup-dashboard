@@ -1,0 +1,11 @@
+commodity,start_month,start_day,note
+Corn,9,1,USDA FAS Commodity Marketing Years: Sep 1-Aug 31
+Soybeans,9,1,USDA FAS: Sep 1-Aug 31
+Soybean Meal,10,1,USDA FAS: Soybean Cake and Meal Oct 1-Sep 30 (soybean oil too)
+Wheat,6,1,USDA FAS: Jun 1-May 31
+Sorghum,9,1,USDA FAS: Sep 1-Aug 31
+Rice,8,1,USDA FAS: Aug 1-Jul 31
+Dist. Grains,9,1,Not listed by USDA FAS; follows corn (ERS feed grains)
+Sugar,4,1,Not on the FAS table; USDA FAS Brazil sugar reports use Apr-Mar (these are Brazilian raw sugar sailings). US sugar is Oct-Sep
+Mixed Cargo,1,1,Combo loads span several USDA years; calendar year so MYTD equals YTD
+Other,1,1,No USDA marketing year; calendar year so MYTD equals YTD

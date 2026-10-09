@@ -1242,7 +1242,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil"])
+    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil", "🧭 Regions"])
 
     with tabs[0]:
         page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
@@ -1262,6 +1262,15 @@ def main():
     with tabs[4]:
         st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
         page_brazil(frames_us=frames)
+
+    with tabs[5]:
+        st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
+        import region_views
+        region_views.page_regions(dict(
+            kpi=kpi, sec=sec, layout=BASE_LAYOUT,
+            comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
+            blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
+        ))
 
     # ── Disclaimer footer ─────────────────────────────────────────────────────
     current_year = datetime.now().year

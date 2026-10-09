@@ -1,0 +1,30 @@
+source,raw_name,elevator,port,confidence,note
+USG,ADM AMA,ADM AMA,South Louisiana,medium,
+USG,ADM DESTREHAN,ADM DESTREHAN,South Louisiana,high,
+USG,ADM DESTRHAN,ADM DESTREHAN,South Louisiana,high,Typo variant in source
+USG,ADM RESERVE,ADM RESERVE,South Louisiana,high,
+USG,CARGILL RESERVE,CARGILL RESERVE,South Louisiana,high,
+USG,BUNGE,BUNGE,South Louisiana,low,Assumed Bunge Destrehan export elevator
+USG,ZEN-NOH,ZEN-NOH,South Louisiana,medium,Convent LA
+USG,COOPER DARROW,COOPER DARROW,South Louisiana,low,Darrow is Ascension Parish; could be Baton Rouge
+USG,CARGILL WESTWEGO,CARGILL WESTWEGO,New Orleans,medium,
+USG,CHS,CHS,Plaquemines,medium,Assumed CHS Myrtle Grove
+USG,LDC PORT ALLEN,LDC PORT ALLEN,Baton Rouge,high,Trailing-space variant in source
+PNW,EGT,EGT,Longview,high,
+PNW,GRAYS HARBOR,GRAYS HARBOR,Grays Harbor,high,
+PNW,KALAMA EXPORT,KALAMA EXPORT,Kalama,high,
+PNW,TEMCO KALAMA,TEMCO KALAMA,Kalama,high,
+PNW,LDC SEATTLE,LDC SEATTLE,Seattle,high,
+PNW,TEMCO PORTLAND,TEMCO PORTLAND,Portland,high,
+PNW,TEMCO TACOMA,TEMCO TACOMA,Tacoma,high,
+PNW,UNITED GRAIN,UNITED GRAIN,Vancouver WA,medium,
+TXG,ADM CORPUS CHRISTI,ADM CORPUS CHRISTI,Corpus Christi,high,
+TXG,ADM GALVESTON,ADM GALVESTON,Galveston,high,
+TXG,ANDERSONS HOUSTON,ANDERSONS HOUSTON,Houston,high,
+TXG,HANSEN MUELLER,HANSEN MUELLER,Houston,medium,
+TXG,TEMCO HOUSTON DOCK 1,TEMCO HOUSTON DOCK 1,Houston,high,
+TXG,TEMCO HOUSTON DOCK 2,TEMCO HOUSTON DOCK 2,Houston,high,
+TXG,CARGILL DOCK 1,CARGILL DOCK 1,Houston,low,Assumed Cargill Houston
+TXG,CARGILL DOCK 2,CARGILL DOCK 2,Houston,low,Assumed Cargill Houston
+TXG,CARGILL DOCK #2,CARGILL DOCK 2,Houston,low,Assumed Cargill Houston
+TXG,"PUBLIC BERTH #11, BROWNSVILLE",PUBLIC BERTH #11 BROWNSVILLE,Brownsville,high,

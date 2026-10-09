@@ -46,6 +46,19 @@ SAILED_COLS = [
     ("mt",          550.9),
 ]
 
+# Header-row x0 of each column in the layout the nominal positions above were measured on.
+# Other report vintages shift the columns by a few points; the shift seen in the header row
+# is applied to the nominal data positions.
+_HEADER_NAMES = {"Port": "port", "Berth": "berth", "Vessels": "vessel", "Charterers": "charterer",
+                 "Status": "status", "ETA": "eta", "ETB": "etb", "ETC/S": "etcs", "WT": "wt",
+                 "Destination": "destination", "Agents": "agent", "Product": "product", "MT": "mt"}
+LINEUP_HDR_REF = {"port": 19.8, "berth": 81.7, "vessel": 130.6, "charterer": 195.8, "status": 251.2,
+                  "eta": 286.7, "etb": 316.1, "etcs": 342.9, "wt": 371.9, "destination": 388.3,
+                  "agent": 450.2, "product": 499.1, "mt": 563.4}
+SAILED_HDR_REF = {"port": 19.8, "berth": 80.5, "vessel": 142.8, "charterer": 206.7, "status": 261.1,
+                  "eta": 295.9, "etb": 324.3, "etcs": 350.1, "wt": 378.7, "destination": 394.9,
+                  "agent": 455.6, "product": 494.9, "mt": 557.7}
+
 CORE_PRODUCTS = {"SBS", "MZ", "SBMP", "HIPRO", "SPC", "RAW SUG", "DDGS"}
 
 VALID_STATUSES = {"LDG", "WTG", "ETA", "SLD"}
@@ -71,6 +84,41 @@ def build_col_boundaries(col_defs):
         hi = 9999 if i == len(col_defs) - 1 else (x + xs[i + 1]) / 2.0
         result.append((name, lo, hi))
     return result
+
+
+def adapt_cols(col_defs, header_words, hdr_ref):
+    """Shift the nominal column positions by how far this page's header row has moved from
+    the reference layout. Falls back to the nominal positions if the header is incomplete."""
+    found = {_HEADER_NAMES[w["text"]]: w["x0"] for w in header_words if w["text"] in _HEADER_NAMES}
+    if set(found) != set(hdr_ref):
+        return col_defs
+    shifted = [(name, x + (found[name] - hdr_ref[name])) for name, x in col_defs]
+    xs = [x for _, x in shifted]
+    return shifted if xs == sorted(xs) else col_defs
+
+
+def _page_section(words):
+    """'lineup' / 'sailed' from the page footer (every page carries 'Line-up' or 'Sailed' at
+    the bottom), falling back to the 'VESSELS SAILED' / 'LINE-UP' title. None if neither."""
+    foot = {w["text"] for w in words if w["top"] > 780}
+    if "Sailed" in foot:
+        return "sailed"
+    if "Line-up" in foot:
+        return "lineup"
+    title = {w["text"].upper() for w in words if 90 < w["top"] < 135}
+    if "SAILED" in title:
+        return "sailed"
+    if "LINE-UP" in title:
+        return "lineup"
+    return None
+
+
+def _header_words(rows):
+    for top, row_words in rows:
+        texts = {w["text"] for w in row_words}
+        if "Port" in texts and ("Berth" in texts or "Vessels" in texts):
+            return row_words
+    return None
 
 
 def assign_col(x0, col_boundaries):
@@ -342,12 +390,27 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
         # MT: concatenate without space to handle split numbers like "2" + ".890.252"
         mt_text = get_col_text(row_words, col_boundaries, "mt", sep="")
 
+        # A cargo row is any row with a readable date and a tonnage. When its status cell is
+        # unreadable (older reports run the charterer and status together, sometimes interleaved
+        # as FOUNDATIOENTA), take a status code from the end of the charterer, else infer it
+        # from the dates, so the tonnage is not lost.
+        cargo_dates = any(parse_date(t) is not None for t in (eta_text, etb_text, etcs_text))
+        if (not null_str(status_text) and cargo_dates and parse_mt(mt_text) > 0
+                and not _is_total_row(texts_set)):
+            ch, code = charterer_text.strip(), None
+            for c in sorted(VALID_STATUSES, key=len, reverse=True):
+                if ch.upper().endswith(c) and len(ch) > len(c):
+                    code, charterer_text = c, ch[: -len(c)].rstrip(" /-")
+                    break
+            status_text = code or infer_status_from_dates(
+                parse_date(eta_text), parse_date(etb_text), report_date) or ""
+
         # ---- Total rows ----
         if _is_total_row(texts_set):
             mt_val = parse_mt(mt_text or "".join(
                 w["text"] for w in row_words if w["x0"] > 400
             ))
-            if "Grand" in texts_set:
+            if "Grand" in texts_set or "Geral" in texts_set:
                 grand_total_pdf = mt_val
             else:
                 # Port total: port column has a name
@@ -375,6 +438,15 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
         has_status = bool(null_str(status_text))
         has_product = bool(null_str(product_text))
 
+        # A second cargo line can carry status/dates/product/MT but no vessel name. It belongs to
+        # the vessel above when the dates match; otherwise it is kept as UNNAMED so its tonnage
+        # still reaches the totals.
+        if (not has_vessel and has_status and prev_record is not None
+                and parse_mt(mt_text) > 0 and cargo_dates):
+            same = (parse_date(eta_text) == prev_record["eta"] and parse_date(etcs_text) == prev_record["etcs"])
+            vessel_text = prev_record["vessel"] if same else "UNNAMED"
+            has_vessel = True
+
         # VESSEL ROW
         if has_vessel and has_status:
             is_maintenance = "MAINTENANCE" in vessel_text.upper()
@@ -386,7 +458,8 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
             if product_norm:
                 product_norm = product_norm.upper()
 
-            mt_val = 0 if is_maintenance else parse_mt(mt_text)
+            pdf_mt = parse_mt(mt_text)
+            mt_val = 0 if is_maintenance else pdf_mt
             excluded = is_maintenance or (product_norm == "ORANGE JUICE" and mt_val == 0)
 
             clean_status = extract_status(status_text)
@@ -413,6 +486,7 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
                 "agent": agent_val,
                 "product": product_norm,
                 "mt": mt_val,
+                "pdf_mt": pdf_mt,          # tonnage as printed, even where we exclude the row
                 "lot": None,
                 "core_product": product_norm in CORE_PRODUCTS if product_norm else False,
                 "excluded": excluded,
@@ -450,6 +524,7 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
                 "agent": prev_record["agent"],
                 "product": product_norm,
                 "mt": mt_val,
+                "pdf_mt": mt_val,
                 "lot": None,
                 "core_product": product_norm in CORE_PRODUCTS if product_norm else False,
                 "excluded": excluded,
@@ -470,9 +545,6 @@ def parse_pdf(pdf_path) -> dict:
     Returns dict with keys:
         report_date, lineup, sailed, summary, validation
     """
-    lineup_cb = build_col_boundaries(LINEUP_COLS)
-    sailed_cb = build_col_boundaries(SAILED_COLS)
-
     report_date = None
     all_lineup = []
     all_sailed = []
@@ -493,25 +565,37 @@ def parse_pdf(pdf_path) -> dict:
                 break
 
         # ---- Process pages ----
+        # The section (line-up vs sailed) comes from each page's title, not its position:
+        # older reports start the sailed section on page 6, current ones on page 7.
+        section = "lineup"
+        cols = {"lineup": LINEUP_COLS, "sailed": SAILED_COLS}
+        hdr_ref = {"lineup": LINEUP_HDR_REF, "sailed": SAILED_HDR_REF}
+        seen_header = {"lineup": False, "sailed": False}
         for page_idx, page in enumerate(pdf.pages):
-            # Page index 0 (page 1) = summary only; skip vessel-row parsing
-            if page_idx == 0:
+            if page_idx == 0:      # page 1 = summary only; no vessel rows
                 continue
 
-            is_sailed = page_idx >= 6  # pages 7-8 (0-indexed 6-7)
-            col_boundaries = sailed_cb if is_sailed else lineup_cb
-
             words = page.extract_words(x_tolerance=3, y_tolerance=3)
-            rows = group_rows_by_top(words)
+            section = _page_section(words) or section
+            is_sailed = section == "sailed"
 
+            rows = group_rows_by_top(words)
             header_top = _find_header_top(rows)
             always_data = header_top is None  # continuation pages have no header
 
-            # Summary boxes (only on the first page of each section)
-            if not is_sailed and header_top is not None and page_idx == 1:
-                lineup_summary = extract_lineup_summary(rows, header_top)
-            if is_sailed and header_top is not None and page_idx == 6:
-                sailed_summary = extract_sailed_summary(rows, header_top)
+            if header_top is not None:
+                cols[section] = adapt_cols(
+                    LINEUP_COLS if not is_sailed else SAILED_COLS, _header_words(rows), hdr_ref[section])
+            col_boundaries = build_col_boundaries(cols[section])
+
+            # Summary boxes (first headed page of each section)
+            if header_top is not None and not seen_header[section]:
+                if is_sailed:
+                    sailed_summary = extract_sailed_summary(rows, header_top)
+                else:
+                    lineup_summary = extract_lineup_summary(rows, header_top)
+            if header_top is not None:
+                seen_header[section] = True
 
             records, port_totals, grand_total = parse_page_rows(
                 rows, col_boundaries, report_date, always_data=always_data
@@ -520,13 +604,13 @@ def parse_pdf(pdf_path) -> dict:
             if is_sailed:
                 all_sailed.extend(records)
                 sailed_port_totals.update(port_totals)
-                if grand_total is not None:
-                    sailed_grand_total_pdf = grand_total
+                if grand_total is not None:      # older reports print one total per sailed block
+                    sailed_grand_total_pdf = (sailed_grand_total_pdf or 0) + grand_total
             else:
                 all_lineup.extend(records)
                 lineup_port_totals.update(port_totals)
                 if grand_total is not None:
-                    lineup_grand_total_pdf = grand_total
+                    lineup_grand_total_pdf = (lineup_grand_total_pdf or 0) + grand_total
 
     # ---- Assign lot numbers across all pages ----
     lot_counters = defaultdict(int)
@@ -546,13 +630,16 @@ def parse_pdf(pdf_path) -> dict:
     sailed_non_excl = [r for r in all_sailed if not r["excluded"]]
     lineup_parsed_total = sum(r["mt"] for r in lineup_non_excl)
     sailed_parsed_total = sum(r["mt"] for r in sailed_non_excl)
+    # Older reports print a nominal tonnage on MAINTENANCE rows and count it in their totals.
+    lineup_excluded_pdf = sum(r["pdf_mt"] for r in all_lineup if r["excluded"])
+    sailed_excluded_pdf = sum(r["pdf_mt"] for r in all_sailed if r["excluded"])
 
     import logging
     logger = logging.getLogger(__name__)
 
     port_mismatches = []
     for port, pdf_total in lineup_port_totals.items():
-        parsed = sum(r["mt"] for r in lineup_non_excl if r["port"] == port)
+        parsed = sum(r["pdf_mt"] for r in all_lineup if r["port"] == port)
         diff = parsed - pdf_total
         if abs(diff) > 1:
             msg = f"Port mismatch – {port}: pdf={pdf_total}, parsed={parsed}, diff={diff}"
@@ -577,6 +664,8 @@ def parse_pdf(pdf_path) -> dict:
             "lineup_grand_total_parsed": lineup_parsed_total,
             "sailed_grand_total_pdf": sailed_grand_total_pdf,
             "sailed_grand_total_parsed": sailed_parsed_total,
+            "lineup_excluded_pdf_mt": lineup_excluded_pdf,
+            "sailed_excluded_pdf_mt": sailed_excluded_pdf,
             "port_mismatches": port_mismatches,
         },
     }

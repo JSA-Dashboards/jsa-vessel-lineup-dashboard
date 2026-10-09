@@ -1,0 +1,28 @@
+port,region,country,fgis_port,aliases,note
+South Louisiana,US Gulf,US,MISSISSIPPI R.,,Lower Miss. Reserve/Destrehan/Ama/Convent; grouped by trade-recognised port
+New Orleans,US Gulf,US,MISSISSIPPI R.,,
+Plaquemines,US Gulf,US,MISSISSIPPI R.,,
+Baton Rouge,US Gulf,US,MISSISSIPPI R.,,
+Portland,PNW,US,COLUMBIA R.,,
+Vancouver WA,PNW,US,COLUMBIA R.,,
+Kalama,PNW,US,COLUMBIA R.,,
+Longview,PNW,US,COLUMBIA R.,,
+Tacoma,PNW,US,PUGET SOUND,,
+Seattle,PNW,US,PUGET SOUND,,
+Grays Harbor,PNW,US,PUGET SOUND,,
+Houston,Texas Gulf,US,N. TEXAS,,
+Corpus Christi,Texas Gulf,US,S. TEXAS,,
+Galveston,Texas Gulf,US,N. TEXAS,,
+Brownsville,Texas Gulf,US,S. TEXAS,,
+Itaqui,Brazil North Arc,BR,,,
+Barcarena,Brazil North Arc,BR,,,
+Santarem,Brazil North Arc,BR,,,
+Santana,Brazil North Arc,BR,,,
+Itacoatiara,Brazil North Arc,BR,,,
+Santos,Brazil South/Southeast,BR,,,
+Paranagua,Brazil South/Southeast,BR,,,
+Rio Grande,Brazil South/Southeast,BR,,,
+Sao Francisco,Brazil South/Southeast,BR,,SO FRANCISCO|SAO FRANCISCO DO SUL,Parser drops the accented char (S?O); alias covers it
+Tubarao,Brazil South/Southeast,BR,,TUBARO|VITORIA,Parser drops the accented char
+Aratu,Brazil South/Southeast,BR,,,Bahia; placed in South/Southeast per spec
+Sao Sebastiao,Brazil South/Southeast,BR,,SO SEBASTIO,Parser drops the accented chars

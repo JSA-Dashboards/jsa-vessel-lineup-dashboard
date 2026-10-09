@@ -1,0 +1,15 @@
+key,value,note
+weight_mode,elapsed,'elapsed' = seasonal weight falls through the month; 'fixed' = constant weight
+blend_weight_seasonality,0.75,Seasonal weight w0 (Pace gets 1 - w); the weight at the start of the month in elapsed mode. Chosen from the backtest grid (w0 0.5-1 x power 0.5-2) as best overall and best for both US and Brazil. Slider in the Forecast tab
+weight_decay_power,2.0,Elapsed mode: w = w0 x (1 - elapsed/days)^this (same backtest grid)
+seasonal_years,3,How many prior marketing years of the same calendar month feed Seasonality
+scale_min,0.25,Clamp on the current-MY-progress scale applied to the seasonal base
+scale_max,4.0,Clamp on the current-MY-progress scale applied to the seasonal base
+min_elapsed_days,5,Below this many elapsed days Pace is flagged early_month (still computed)
+min_backtest_months,6,Backtest months needed at port x commodity level before pooling by commodity
+range_low_q,0.10,Low end of the range = this quantile of backtested actual/projected
+range_high_q,0.90,High end of the range = this quantile of backtested actual/projected
+history_start_US,2024-01-01,US sail history is thin before 2024 (2023 has ~10% of the events)
+history_start_Brazil,2024-07-01,First APS line-up PDF in the mailbox
+data_through_US,last_event,US sail dates trail the snapshot date by about a week: elapsed days end at the last sail date
+data_through_Brazil,last_snapshot,The APS sailed list is current to the report date: elapsed days end at the latest report

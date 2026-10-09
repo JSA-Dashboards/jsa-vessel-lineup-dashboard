@@ -15,6 +15,8 @@ Cron: */30 12-23 * * 1-5 root /opt/vessel-lineup-dashboard/.venv/bin/python3 \
         >> /opt/vessel-lineup-dashboard/poller.log 2>&1
 """
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -30,6 +32,8 @@ REPO_DIR   = Path(__file__).parent
 ENV_FILE   = Path("/opt/basis-tracker/.env")
 CACHE_FILE = REPO_DIR / ".token_cache.json"
 STATE_FILE = REPO_DIR / "poller_state.json"
+FACTS_DB   = REPO_DIR / "facts.db"
+LOCK_FILE  = REPO_DIR / "logs" / ".facts.lock"      # shared with deploy/run_brazil.sh: one writer of facts.db + git at a time
 LOG_FILE   = REPO_DIR / "poller.log"
 CONVERT_PY = REPO_DIR / "convert_southport.py"
 VENV_PY    = REPO_DIR / ".venv" / "bin" / "python3"
@@ -201,9 +205,33 @@ def run_converter(tmp_path):
         raise RuntimeError("convert_southport.py failed")
 
 
+@contextlib.contextmanager
+def facts_lock():
+    LOCK_FILE.parent.mkdir(exist_ok=True)
+    with open(LOCK_FILE, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+def update_facts(xlsx_path, att_name, recv_time):
+    """Bank this file as a line-up snapshot + sail events in facts.db. A failure here is logged and
+    never blocks the workbook push below."""
+    try:
+        sys.path.insert(0, str(REPO_DIR))
+        from fact_model import ingest
+        res = ingest.ingest_southport_file(str(xlsx_path), name=att_name, received=recv_time, facts_db=str(FACTS_DB))
+        log.info("facts.db updated: %s", res)
+    except Exception:
+        log.exception("facts.db update failed (workbook push continues)")
+
+
 def git_push(subject):
+    to_add = ["Vessel Lineup - US.xlsx"] + (["facts.db"] if FACTS_DB.exists() else [])
     for cmd in [
-        ["git", "-C", str(REPO_DIR), "add", "Vessel Lineup - US.xlsx"],
+        ["git", "-C", str(REPO_DIR), "add", *to_add],
         ["git", "-C", str(REPO_DIR), "commit", "-m",
          "Update vessel lineup from Southport: " + subject,
          "--author", "Kolten Postin <275148418+koltenpostin93-blip@users.noreply.github.com>"],
@@ -255,8 +283,10 @@ def main():
     log.info("New email: [%s]  attachment: %s", subject, att_name)
     tmp = download_attachment(token, cfg["GRAPH_INBOX_USER"], msg_id, att_id)
     try:
-        run_converter(tmp)
-        git_push(subject)
+        with facts_lock():
+            run_converter(tmp)
+            update_facts(tmp, att_name, recv_time)
+            git_push(subject)
         state["last_processed_id"]   = msg_id
         state["last_processed_time"] = recv_time
         save_state(state)

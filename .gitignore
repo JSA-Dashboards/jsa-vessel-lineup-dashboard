@@ -16,3 +16,10 @@ Thumbs.db
 poller_state.json
 poller.log
 *.bak.xlsx
+
+# Droplet job output and the raw mailbox archive (hundreds of MB) - never committed
+logs/
+history/
+brazil_poller.log
+brazil_poller_state.json
+.pytest_cache/
