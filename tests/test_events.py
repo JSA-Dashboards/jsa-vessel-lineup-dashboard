@@ -26,7 +26,7 @@ def us_vessels(rows):
 
 def mk_events(rows):
     base = {"source": "US", "region": "US Gulf", "port": "Plaquemines", "fgis_port": "MISSISSIPPI R.",
-            "elevator": "CHS", "commodity": "Corn", "destination": "JAPAN", "vessel": "V", "kmt": 50.0,
+            "elevator": "CHS", "commodity": "Corn", "combo": "", "destination": "JAPAN", "vessel": "V", "kmt": 50.0,
             "mapped": True, "unmapped_reason": ""}
     df = pd.DataFrame([{**base, **r} for r in rows])
     df["event_id"] = [f"e{i}" for i in range(len(df))]

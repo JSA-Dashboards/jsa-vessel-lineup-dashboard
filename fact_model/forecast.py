@@ -27,6 +27,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from . import combos
 from .dimensions import CONFIG_DIR, default_config, my_start
 
 KEY = ["source", "region", "port", "commodity"]
@@ -304,3 +305,43 @@ def backtest_methods(events, snapshots=None, elapsed=15, specs=None, min_actual_
              .reset_index())
     out["spec"] = pd.Categorical(out["spec"], categories=list(labels.values()), ordered=True)
     return out.sort_values(["source", "commodity", "spec"]).reset_index(drop=True)
+
+
+ALLOC_COLS = ["mtd_kmt", "pace_kmt", "seasonal_kmt", "blend_kmt", "low_kmt", "high_kmt", "vessels_mtd"]
+
+
+def allocate_combo_projection(fc, events, trailing_months=12):
+    """Split each port's projected Mixed Cargo tonnage across commodities and add it to that port's
+    single-commodity rows. The combo series is forecast on its own first (combo boats are lumpy but steady
+    in total), then split using that port's trailing-12-month combo mix under the corn-counts-double rule,
+    falling back to the region's mix. Totals are conserved: every column sums to the same value before and
+    after. A port with no combo history keeps its Mixed Cargo row."""
+    mix_port = combos.combo_mix(events, by=("source", "region", "port"), trailing_months=trailing_months)
+    mix_reg = combos.combo_mix(events, by=("source", "region"), trailing_months=trailing_months)
+    is_mixed = fc["commodity"] == combos.COMBO_GROUP
+    rest, mixed = fc[~is_mixed], fc[is_mixed]
+    pieces, kept = [], []
+    for _, r in mixed.iterrows():
+        m = mix_port[(mix_port["source"] == r["source"]) & (mix_port["region"] == r["region"]) & (mix_port["port"] == r["port"])]
+        if m.empty:
+            m = mix_reg[(mix_reg["source"] == r["source"]) & (mix_reg["region"] == r["region"])]
+        if m.empty:
+            kept.append(r)
+            continue
+        for _, s_ in m.iterrows():
+            p = r.copy()
+            p["commodity"] = s_["commodity"]
+            for c in ALLOC_COLS:
+                p[c] = p[c] * s_["share"] if pd.notna(p[c]) else p[c]
+            p["quality"] = (str(p["quality"]) + ";incl_combo_share").strip(";")
+            pieces.append(p)
+    parts = [rest] + ([pd.DataFrame(pieces)] if pieces else []) + ([pd.DataFrame(kept)] if kept else [])
+    allr = pd.concat(parts, ignore_index=True)
+    agg = {c: "sum" for c in ALLOC_COLS}
+    agg.update({c: "first" for c in allr.columns if c not in ALLOC_COLS + KEY})
+    agg["quality"] = lambda q: ";".join(dict.fromkeys(x for v in q for x in str(v).split(";") if x))
+    out = allr.groupby(KEY, dropna=False, as_index=False).agg({**agg})
+    for c in ("low_kmt", "high_kmt", "seasonal_kmt"):               # sum() turns all-NaN into 0; keep 'no range' as NaN
+        none = allr.groupby(KEY, dropna=False)[c].apply(lambda x: x.isna().all()).to_numpy()
+        out.loc[none, c] = np.nan
+    return out[OUT_COLS].sort_values(["source", "region", "port", "commodity"]).reset_index(drop=True)

@@ -41,7 +41,8 @@ def reconcile_monthly(events, fgis):
     Mixed Cargo / Other have no FGIS counterpart and are returned with fgis_kmt NaN."""
     e = events[(events["source"] == "US") & (events["fgis_port"] != "")].copy()
     e["month"] = pd.to_datetime(e["sail_date"]).dt.to_period("M").dt.to_timestamp()
-    ours = (e.assign(_nt=e["kmt"].isna().astype(int), kmt=e["kmt"].fillna(0.0), _v=1)
+    w = e["vessel_w"] if "vessel_w" in e else 1.0
+    ours = (e.assign(_nt=e["kmt"].isna() * w, kmt=e["kmt"].fillna(0.0), _v=w)
               .groupby(["month", "fgis_port", "commodity"], as_index=False)
               .agg(ours_kmt=("kmt", "sum"), ours_vessels=("_v", "sum"), ours_no_tonnage=("_nt", "sum")))
     out = ours.merge(fgis, on=["month", "fgis_port", "commodity"], how="outer")

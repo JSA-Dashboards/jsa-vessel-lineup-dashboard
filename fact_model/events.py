@@ -17,7 +17,7 @@ import pandas as pd
 from .dimensions import add_geography, commodity_group, default_config, my_start, marketing_year_label
 
 EVENT_COLS = ["event_id", "source", "sail_date", "region", "port", "fgis_port", "elevator",
-              "commodity", "destination", "vessel", "kmt", "mapped", "unmapped_reason"]
+              "commodity", "combo", "destination", "vessel", "kmt", "mapped", "unmapped_reason"]
 KEY = ["source", "region", "port", "elevator", "commodity"]
 
 
@@ -43,6 +43,7 @@ def us_sail_events(vessels, cfg=None):
     s = vessels[vessels["sail_date"].notna() & (vessels["sail_date"] >= "2000-01-01")].copy()
     s = add_geography(s, "US", cfg)
     s["commodity"] = [commodity_group("US", c) for c in s["commodity_raw"]]
+    s["combo"] = s["commodity_raw"].astype(str).str.upper().str.strip().where(s["commodity"] == "Mixed Cargo", "")
     # Identity = sheet + vessel + sail date. Southport revises the elevator pairing, commodity
     # code and tonnage between files, so those must not be part of the id or one sailing would be
     # counted once per revision. Rows with no vessel name fall back to the elevator.
@@ -71,6 +72,7 @@ def brazil_sail_events(sailed_df, cfg=None):
     s = s.rename(columns={"port": "port_raw"})
     s = add_geography(s, "Brazil", cfg)
     s["commodity"] = [commodity_group("Brazil", p) for p in s["product"]]
+    s["combo"] = ""
     s["kmt"] = pd.to_numeric(s["mt"], errors="coerce").where(lambda x: x > 0) / 1000.0
     return _finish(s, "Brazil", cfg)
 
@@ -100,14 +102,15 @@ def events_executed(events, as_of, by=KEY, cfg=None):
     e["_mystart"] = [my_cache[(a, c)] for a, c in zip(e["_asof"], e["commodity"])]
     e["_k"] = e["kmt"].fillna(0.0)
     e["_nt"] = e["kmt"].isna()
+    w = e["vessel_w"] if "vessel_w" in e else 1.0            # pro-rata vessel count for split combo vessels
     in_m, in_my, in_y = (e["sail_date"] >= e["_mstart"]), (e["sail_date"] >= e["_mystart"]), (e["sail_date"] >= e["_ystart"])
     by = list(by)
     g = pd.DataFrame({
         **{c: e[c] for c in by},
         "mtd_kmt": e["_k"].where(in_m, 0.0), "mytd_kmt": e["_k"].where(in_my, 0.0),
         "ytd_kmt": e["_k"].where(in_y, 0.0),
-        "vessels_mtd": in_m.astype(int), "vessels_mytd": in_my.astype(int),
-        "no_tonnage_mytd": (e["_nt"] & in_my).astype(int),
+        "vessels_mtd": in_m * w, "vessels_mytd": in_my * w,
+        "no_tonnage_mytd": (e["_nt"] & in_my) * w,
     }).groupby(by, dropna=False).sum().reset_index()
     v = g["vessels_mytd"].where(g["vessels_mytd"] > 0)
     g["coverage_mytd"] = 1 - g["no_tonnage_mytd"] / v
@@ -118,9 +121,10 @@ def events_monthly(events, by=KEY):
     """Shipped tonnage per calendar month per `by`. Direct sums, no differencing."""
     e = events.copy()
     e["month"] = pd.to_datetime(e["sail_date"]).dt.to_period("M").dt.to_timestamp()
-    e["_nt"] = e["kmt"].isna().astype(int)
+    w = e["vessel_w"] if "vessel_w" in e else 1.0
+    e["_nt"] = e["kmt"].isna() * w
     by = list(by)
-    g = (e.assign(kmt=e["kmt"].fillna(0.0), vessels=1)
+    g = (e.assign(kmt=e["kmt"].fillna(0.0), vessels=w)
           .groupby(["month", *by], dropna=False)
           .agg(kmt=("kmt", "sum"), vessels=("vessels", "sum"), no_tonnage=("_nt", "sum")).reset_index())
     g["marketing_year"] = [marketing_year_label(m, c) for m, c in zip(g["month"], g["commodity"])] if "commodity" in g else ""

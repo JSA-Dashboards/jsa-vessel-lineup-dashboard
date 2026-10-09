@@ -9,7 +9,7 @@ import pandas as pd
 
 from .dimensions import add_geography, commodity_group, default_config, marketing_year_label
 
-DIMS = ["report_date", "source", "region", "port", "elevator", "commodity", "destination"]
+DIMS = ["report_date", "source", "region", "port", "elevator", "commodity", "combo", "destination"]
 FACT_COLS = DIMS + ["month", "marketing_year", "kmt", "vessels", "vessels_no_tonnage",
                     "mapped", "unmapped_reason"]
 
@@ -81,6 +81,7 @@ def _aggregate(v, report_date_col="report_date"):
     v["destination"] = (v["destination"].astype("string").str.strip().str.upper()
                         .replace({"RVT": "UNKNOWN", "?": "UNKNOWN", "": "UNKNOWN"})
                         .fillna("UNKNOWN"))
+    v["combo"] = v["combo"].fillna("")
     v["no_tonnage"] = v["kmt"].isna()
     v["kmt"] = v["kmt"].fillna(0.0)
     v["vessel_id"] = v["port"].astype(str) + "|" + v["elevator"].astype(str) + "|" + v["vessel"].astype(str)
@@ -104,6 +105,7 @@ def us_lineup_snapshot(vessels, report_date, cfg=None):
     q["source"] = "US"
     q["report_date"] = pd.Timestamp(report_date)
     q["commodity"] = [commodity_group("US", c) for c in q["commodity_raw"]]
+    q["combo"] = q["commodity_raw"].astype(str).str.upper().str.strip().where(q["commodity"] == "Mixed Cargo", "")
     return _aggregate(q)
 
 
@@ -117,6 +119,7 @@ def brazil_lineup_snapshot(lineup_df, cfg=None):
     q["source"] = "Brazil"
     q["kmt"] = pd.to_numeric(q["mt"], errors="coerce") / 1000.0
     q["commodity"] = [commodity_group("Brazil", p) for p in q["product"]]
+    q["combo"] = ""
     return _aggregate(q)
 
 

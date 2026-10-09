@@ -14,6 +14,7 @@ import streamlit as st
 
 from fact_model import dimensions as dim
 from fact_model import adjustments as adj
+from fact_model import combos
 from fact_model import events as ev
 from fact_model import fgis, store
 from fact_model import forecast as fcst
@@ -89,6 +90,9 @@ def view_lineup(lineup, ui):
     comms = sorted(snap["commodity"].unique())
     com_sel = c3.multiselect("Commodities", comms, default=comms, key="rl_com")
     s = snap[snap["region"].isin(reg_sel) & snap["commodity"].isin(com_sel)]
+    alloc = st.checkbox("Allocate combo boats' tonnage to commodities (corn counts double)", value=True, key="rl_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata.")
+    s_t = combos.allocate_combos(s, value_cols=("kmt",), count_cols=("vessels", "vessels_no_tonnage")) if alloc else s
 
     ui["sec"]("📝  Line-up summary — vessels queued, change vs last week (LW) / last month (LM)")
     lines = sm.summary_lines(sm.lineup_summary(lineup))
@@ -115,12 +119,12 @@ def view_lineup(lineup, ui):
     _unmapped_panel(snap, "kmt", "elevator/port group(s)")
 
     ui["sec"]("🟡  Queued tonnage — region × commodity")
-    piv = s.pivot_table(index="region", columns="commodity", values="kmt", aggfunc="sum", fill_value=0.0)
+    piv = s_t.pivot_table(index="region", columns="commodity", values="kmt", aggfunc="sum", fill_value=0.0)
     piv = piv.reindex([r for r in _region_order() if r in piv.index])
     piv["Total"] = piv.sum(axis=1)
     cc, ct = st.columns([1.4, 1])
     with cc:
-        g = s.groupby(["region", "commodity"], as_index=False)["kmt"].sum()
+        g = s_t.groupby(["region", "commodity"], as_index=False)["kmt"].sum()
         fig = px.bar(g, x="region", y="kmt", color="commodity", color_discrete_map=ui["comm_colors"],
                      barmode="stack", labels={"kmt": "kMT", "region": ""}, title="Queued tonnage by region (kMT)",
                      category_orders={"region": [r for r in _region_order() if r in set(g["region"])]})
@@ -131,7 +135,7 @@ def view_lineup(lineup, ui):
         st.dataframe(piv.round(0), use_container_width=True)
 
     ui["sec"]("🎯  Destination")
-    d = (s.groupby("destination", as_index=False).agg(kmt=("kmt", "sum"), vessels=("vessels", "sum"))
+    d = (s_t.groupby("destination", as_index=False).agg(kmt=("kmt", "sum"), vessels=("vessels", "sum"))
           .sort_values("kmt", ascending=False))
     topn = st.slider("Top destinations", 5, 30, 12, key="rl_topn")
     d = d.head(topn)
@@ -152,7 +156,7 @@ def view_lineup(lineup, ui):
         return
     dr, dp = st.columns(2)
     reg = dr.selectbox("Region", r_opts, key="rl_dr_reg")
-    in_reg = s[s["region"] == reg]
+    in_reg = s_t[s_t["region"] == reg]
     ports = ["All ports"] + sorted(in_reg["port"].unique())
     port = dp.selectbox("Port", ports, key=f"rl_dr_port_{reg}")
     if port == "All ports":
@@ -220,6 +224,10 @@ def view_execution(events, ui):
     if events.empty:
         st.info("No sail events banked yet. Run build_facts.py.")
         return
+    alloc = st.checkbox("Allocate combo boats to commodities (corn counts double)", value=True, key="rx_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata.")
+    if alloc:
+        events = combos.allocate_combos(events.assign(vessel_w=1.0), value_cols=("kmt",), count_cols=("vessel_w",))
     through = events.groupby("source")["sail_date"].max()
     st.caption("Shipped tonnage is built from vessel sail events (US: SAIL DATE; Brazil: ETCS of vessels the APS "
                "report lists as sailed). Figures are as of each source's last sail date: "
@@ -256,7 +264,7 @@ def view_execution(events, ui):
                              "vessels_mytd": "Vessels MYTD", "coverage_mytd": "Tonnage reported"})
     show = _sort_regions(show)[cols + ["MTD kMT", "MYTD kMT", "YTD kMT", "Vessels MYTD", "Tonnage reported"]]
     st.dataframe(show.style.format({"MTD kMT": "{:,.0f}", "MYTD kMT": "{:,.0f}", "YTD kMT": "{:,.0f}",
-                                    "Tonnage reported": "{:.0%}"}, na_rep="—"),
+                                    "Vessels MYTD": "{:,.0f}", "Tonnage reported": "{:.0%}"}, na_rep="—"),
                  use_container_width=True, hide_index=True)
 
     ui["sec"]("📅  Shipped by month")
@@ -344,7 +352,11 @@ def view_forecast(events, lineup, ui, mtime):
                         "Constant weight on Seasonality all month. 0 = Pace only, 1 = Seasonality only."))
     srcs = sorted(events["source"].unique())
     src_sel = c2.multiselect("Source", srcs, default=srcs, key="rf_src")
+    alloc = st.checkbox("Allocate combo boats to commodities (corn counts double)", value=True, key="rf_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata. For the forecast, the combo series is projected on its own and then split using each port's trailing-12-month combo mix.")
     fc = _forecast(round(w, 4), mode, events, lineup, mtime=mtime)
+    if alloc:
+        fc = fcst.allocate_combo_projection(fc, events)
     comms = sorted(fc["commodity"].unique())
     default_c = [c for c in ("Corn", "Soybeans", "Soybean Meal", "Wheat") if c in comms]
     com_sel = c3.multiselect("Commodities", comms, default=default_c, key="rf_com")

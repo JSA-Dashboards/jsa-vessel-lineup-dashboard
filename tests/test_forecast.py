@@ -275,3 +275,32 @@ def test_freight_spread_layer_is_an_interface_only():
     with pytest.raises(NotImplementedError):
         adj.spread_volume_backtest(None, None)
     assert "CAUSAL" in adj.reallocate_by_spread.__doc__ and "backtest" in adj.reallocate_by_spread.__doc__
+
+
+# ── combo allocation of the projection ───────────────────────────────────────
+
+def test_projection_allocation_conserves_totals_and_uses_the_ports_trailing_combo_mix():
+    rows = []
+    for m in pd.date_range("2024-01-01", periods=33, freq="MS"):                       # steady single-commodity corn and a combo series
+        rows += [(m + pd.Timedelta(days=2), 50.0), (m + pd.Timedelta(days=21), 50.0)]
+    corn = ev(rows)
+    combo = ev(rows, commodity="Mixed Cargo").assign(combo="CORN/SBM")
+    events = pd.concat([corn, combo], ignore_index=True)
+    fc_ = run(events, w=0.5)
+    out = fc.allocate_combo_projection(fc_, events)
+    for col in ("mtd_kmt", "pace_kmt", "blend_kmt", "vessels_mtd"):
+        assert out[col].sum() == pytest.approx(fc_[col].sum()), col
+    assert set(out["commodity"]) == {"Corn", "Soybean Meal"}                            # Mixed Cargo is gone, split two ways
+    mixed = fc_[fc_["commodity"] == "Mixed Cargo"].iloc[0]
+    corn_row = out[out["commodity"] == "Corn"].iloc[0]
+    base_corn = fc_[fc_["commodity"] == "Corn"].iloc[0]
+    assert corn_row["blend_kmt"] == pytest.approx(base_corn["blend_kmt"] + mixed["blend_kmt"] * 2 / 3)
+    assert out[out["commodity"] == "Soybean Meal"].iloc[0]["blend_kmt"] == pytest.approx(mixed["blend_kmt"] / 3)
+    assert "incl_combo_share" in out[out["commodity"] == "Soybean Meal"].iloc[0]["quality"]
+
+
+def test_a_port_with_no_combo_history_keeps_its_mixed_cargo_row():
+    events = ev([("2026-09-03", 40.0)], commodity="Mixed Cargo").assign(combo="")        # no usable combo string anywhere
+    fc_ = run(events)
+    out = fc.allocate_combo_projection(fc_, events)
+    assert list(out["commodity"]) == ["Mixed Cargo"] and out["blend_kmt"].sum() == pytest.approx(fc_["blend_kmt"].sum())
