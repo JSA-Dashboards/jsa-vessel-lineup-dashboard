@@ -1,4 +1,4 @@
-"""Combo-boat allocation: corn counts double, everything else once; totals conserved.
+"""Combo-boat allocation: corn (else wheat) counts double, everything else once; totals conserved.
 
     pytest tests/test_combos.py -v
 """
@@ -28,8 +28,17 @@ def test_order_in_the_string_does_not_matter_and_codes_listed_twice_count_once()
     assert cb.combo_shares("CORN/CORN/SBM") == pytest.approx(cb.combo_shares("CORN/SBM"))
 
 
-def test_no_corn_splits_equally_and_distillers_codes_pool_into_one_group():
-    assert cb.combo_shares("SBM/WHT") == pytest.approx({"Soybean Meal": 0.5, "Wheat": 0.5})
+def test_wheat_is_the_heavy_one_when_there_is_no_corn():
+    assert cb.combo_shares("SBM/WHT") == pytest.approx({"Wheat": 2 / 3, "Soybean Meal": 1 / 3})
+    assert cb.combo_shares("WHT/SBM/YSB") == pytest.approx({"Wheat": 1 / 2, "Soybean Meal": 1 / 4, "Soybeans": 1 / 4})
+    # corn still wins when both are there: wheat is then an ordinary "other"
+    assert cb.combo_shares("CORN/WHT") == pytest.approx({"Corn": 2 / 3, "Wheat": 1 / 3})
+    assert cb.combo_shares("WHT/CORN/SBM") == pytest.approx({"Corn": 1 / 2, "Wheat": 1 / 4, "Soybean Meal": 1 / 4})
+
+
+def test_neither_corn_nor_wheat_splits_equally_and_distillers_codes_pool_into_one_group():
+    assert cb.combo_shares("SBM/YSB") == pytest.approx({"Soybean Meal": 0.5, "Soybeans": 0.5})
+    assert cb.combo_shares("SBM/YSB/RICE") == pytest.approx({"Soybean Meal": 1 / 3, "Soybeans": 1 / 3, "Rice": 1 / 3})
     # DDGS and GDDG are two listed commodities (weight 1 each) that both belong to Dist. Grains
     s = cb.combo_shares("CORN/DDGS/GDDG")
     assert s == pytest.approx({"Corn": 1 / 2, "Dist. Grains": 1 / 2})
@@ -68,7 +77,7 @@ def test_combo_mix_uses_trailing_tonnage_weighted_shares_per_port():
         "sail_date": pd.to_datetime(["2026-08-01", "2026-09-01", "2026-09-02", "2024-01-01"])})            # last row is older than 12 months
     m = cb.combo_mix(e).set_index(["port", "commodity"])["share"]
     assert m[("A", "Corn")] == pytest.approx(2 / 3) and m[("A", "Soybean Meal")] == pytest.approx(1 / 3)
-    assert m[("B", "Wheat")] == pytest.approx(0.5)
+    assert m[("B", "Wheat")] == pytest.approx(2 / 3) and m[("B", "Soybean Meal")] == pytest.approx(1 / 3)       # SBM/WHT: wheat is heavy
     assert m.groupby(level="port").sum().tolist() == pytest.approx([1.0, 1.0])
 
 

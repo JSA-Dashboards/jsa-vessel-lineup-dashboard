@@ -90,8 +90,8 @@ def view_lineup(lineup, ui):
     comms = sorted(snap["commodity"].unique())
     com_sel = c3.multiselect("Commodities", comms, default=comms, key="rl_com")
     s = snap[snap["region"].isin(reg_sel) & snap["commodity"].isin(com_sel)]
-    alloc = st.checkbox("Allocate combo boats' tonnage to commodities (corn counts double)", value=True, key="rl_alloc",
-                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata.")
+    alloc = st.checkbox("Allocate combo boats' tonnage to commodities (corn, else wheat, counts double)", value=True, key="rl_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other); with no corn, wheat counts double. Totals are unchanged; vessel counts are shared pro rata.")
     s_t = combos.allocate_combos(s, value_cols=("kmt",), count_cols=("vessels", "vessels_no_tonnage")) if alloc else s
 
     ui["sec"]("📝  Line-up summary — vessels queued, change vs last week (LW) / last month (LM)")
@@ -224,8 +224,8 @@ def view_execution(events, ui):
     if events.empty:
         st.info("No sail events banked yet. Run build_facts.py.")
         return
-    alloc = st.checkbox("Allocate combo boats to commodities (corn counts double)", value=True, key="rx_alloc",
-                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata.")
+    alloc = st.checkbox("Allocate combo boats to commodities (corn, else wheat, counts double)", value=True, key="rx_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other); with no corn, wheat counts double. Totals are unchanged; vessel counts are shared pro rata.")
     if alloc:
         events = combos.allocate_combos(events.assign(vessel_w=1.0), value_cols=("kmt",), count_cols=("vessel_w",))
     through = events.groupby("source")["sail_date"].max()
@@ -352,8 +352,8 @@ def view_forecast(events, lineup, ui, mtime):
                         "Constant weight on Seasonality all month. 0 = Pace only, 1 = Seasonality only."))
     srcs = sorted(events["source"].unique())
     src_sel = c2.multiselect("Source", srcs, default=srcs, key="rf_src")
-    alloc = st.checkbox("Allocate combo boats to commodities (corn counts double)", value=True, key="rf_alloc",
-                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other). Totals are unchanged; vessel counts are shared pro rata. For the forecast, the combo series is projected on its own and then split using each port's trailing-12-month combo mix.")
+    alloc = st.checkbox("Allocate combo boats to commodities (corn, else wheat, counts double)", value=True, key="rf_alloc",
+                        help="Splits each combo boat's tonnage across the commodities it carries: corn counts double (2 commodities = 2/3 corn, 1/3 other; 3 = 1/2 corn, 1/4 each other); with no corn, wheat counts double. Totals are unchanged; vessel counts are shared pro rata. For the forecast, the combo series is projected on its own and then split using each port's trailing-12-month combo mix.")
     fc = _forecast(round(w, 4), mode, events, lineup, mtime=mtime)
     if alloc:
         fc = fcst.allocate_combo_projection(fc, events)
