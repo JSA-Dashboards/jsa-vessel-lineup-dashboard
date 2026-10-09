@@ -18,6 +18,7 @@ from fact_model import events as ev
 from fact_model import fgis, store
 from fact_model import forecast as fcst
 from fact_model import lineup as lu
+from fact_model import summary as sm
 
 LEVELS = {"Region": ["region"], "Region → Port": ["region", "port"],
           "Region → Port → Elevator": ["region", "port", "elevator"]}
@@ -88,6 +89,22 @@ def view_lineup(lineup, ui):
     comms = sorted(snap["commodity"].unique())
     com_sel = c3.multiselect("Commodities", comms, default=comms, key="rl_com")
     s = snap[snap["region"].isin(reg_sel) & snap["commodity"].isin(com_sel)]
+
+    ui["sec"]("📝  Line-up summary — vessels queued, change vs last week (LW) / last month (LM)")
+    lines = sm.summary_lines(sm.lineup_summary(lineup))
+    show_bz = st.checkbox("Include Brazil", value=False, key="rl_sum_bz")
+    text = []
+    for src, region, as_of, line, note in lines:
+        if src == "Brazil" and not show_bz:
+            continue
+        if region == "UNMAPPED" and not show_bz and src == "US":
+            continue
+        text.append(line)
+        if note:
+            text.append("    " + note)
+    st.code(chr(10).join(text) if text else "No line-up snapshots.", language=None)
+    st.caption("Vessel counts, not tonnage. LW / LM compare with the banked snapshot nearest 7 days / 1 month before the "
+               "region's latest one; n/a means none was close enough. COMBO = multi-commodity vessels (counted once, as COMBO).")
 
     k1, k2, k3, k4 = st.columns(4)
     ui["kpi"](k1, "Queued tonnage", f"{s['kmt'].sum():,.0f} kMT", "latest snapshot per source", ui["blue"])

@@ -20,9 +20,13 @@ Santarem,Brazil North Arc,BR,,,
 Santana,Brazil North Arc,BR,,,
 Itacoatiara,Brazil North Arc,BR,,,
 Santos,Brazil South/Southeast,BR,,,
-Paranagua,Brazil South/Southeast,BR,,,
+Paranagua,Brazil South/Southeast,BR,,PRANAGUA,Source typo PRANAGUA seen in some APS files
 Rio Grande,Brazil South/Southeast,BR,,,
 Sao Francisco,Brazil South/Southeast,BR,,SO FRANCISCO|SAO FRANCISCO DO SUL,Parser drops the accented char (S?O); alias covers it
 Tubarao,Brazil South/Southeast,BR,,TUBARO|VITORIA,Parser drops the accented char
 Aratu,Brazil South/Southeast,BR,,,Bahia; placed in South/Southeast per spec
 Sao Sebastiao,Brazil South/Southeast,BR,,SO SEBASTIO,Parser drops the accented chars
+Imbituba,Brazil South/Southeast,BR,,,Santa Catarina
+Antonina,Brazil South/Southeast,BR,,,Parana (Paranagua bay)
+Ilheus,Brazil South/Southeast,BR,,,Bahia; placed with Aratu per the spec's Bahia -> South/Southeast. Confirm
+Acu,Brazil South/Southeast,BR,,,"Porto do Acu, Rio de Janeiro. Confirm"

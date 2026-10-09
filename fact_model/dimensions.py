@@ -90,18 +90,24 @@ def resolve_port(raw_port, cfg=None):
     return (str(raw_port).strip() if str(raw_port).strip() else UNMAPPED), UNMAPPED, False
 
 
+# The sheet a US row comes from already says which region it is in. An elevator we cannot place
+# is therefore UNMAPPED as a PORT (flagged, never dropped) but still counts in its region.
+SHEET_REGION = {"USG": "US Gulf", "PNW": "PNW", "TXG": "Texas Gulf"}
+
+
 def resolve_us_elevator(sheet, raw_elevator, cfg=None):
     """US sheets name only the elevator. TXG cells are 'dock / company'; the dock
     (first token) is the facility. -> (elevator, port, region, mapped, reason)."""
     cfg = cfg or default_config()
+    region = SHEET_REGION.get(sheet, UNMAPPED)
     raw = "" if pd.isna(raw_elevator) else str(raw_elevator).strip()
     token = raw.split(" / ")[0].strip() if sheet == "TXG" else raw
     if not token or token.lower() == "nan":
-        return UNMAPPED, UNMAPPED, UNMAPPED, False, "no terminal named in report"
+        return UNMAPPED, UNMAPPED, region, False, "no terminal named in report"
     hit = cfg._elev_lookup.get((sheet, norm_key(token)))
     if hit:
         return hit[0], hit[1], hit[2], True, ""
-    return token, UNMAPPED, UNMAPPED, False, f"elevator not in elevator_port.csv ({sheet})"
+    return token, UNMAPPED, region, False, f"elevator not in elevator_port.csv ({sheet})"
 
 
 def add_geography(df, source, cfg=None):

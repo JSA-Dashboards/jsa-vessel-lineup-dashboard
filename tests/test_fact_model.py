@@ -187,7 +187,7 @@ def test_blank_placeholder_rows_are_not_counted_as_queued_vessels():
 
 # ── unmapped ports are flagged, not dropped ──────────────────────────────────
 
-def test_unmapped_us_elevators_are_kept_and_flagged():
+def test_unmapped_us_elevators_are_kept_flagged_and_stay_in_their_sheet_region():
     v = pd.DataFrame({"sheet": ["USG", "USG", "PNW", "TXG"],
                       "elevator_raw": ["CHS", "MGMT", "COLUMBIA EXPORT", None],
                       "vessel": list("abcd"), "status_norm": "ETA", "kmt": [10.0, 20.0, 30.0, 40.0],
@@ -196,10 +196,13 @@ def test_unmapped_us_elevators_are_kept_and_flagged():
     assert snap["kmt"].sum() == 100.0 and snap["vessels"].sum() == 4            # nothing dropped
     bad = snap[~snap["mapped"]]
     assert set(bad["elevator"]) == {"MGMT", "COLUMBIA EXPORT", dim.UNMAPPED}
-    assert (bad["region"] == dim.UNMAPPED).all()
+    assert (bad["port"] == dim.UNMAPPED).all()                                  # the PORT is unknown ...
+    assert dict(zip(bad["elevator"], bad["region"])) == {"MGMT": "US Gulf", "COLUMBIA EXPORT": "PNW", dim.UNMAPPED: "Texas Gulf"}   # ... the region is not
     rep = dim.unmapped_report(snap)
     assert rep["kmt"].sum() == 90.0
     assert snap[snap["mapped"]]["port"].tolist() == ["Plaquemines"]
+    by_region = snap.groupby("region")["vessels"].sum().to_dict()
+    assert by_region == {"US Gulf": 2, "PNW": 1, "Texas Gulf": 1}               # region totals include the unmapped ones
 
 
 def test_unmapped_brazil_port_is_kept_and_flagged():
@@ -214,6 +217,8 @@ def test_unmapped_brazil_port_is_kept_and_flagged():
 
 
 @pytest.mark.parametrize("raw,port,region", [
+    ("IMBITUBA", "Imbituba", "Brazil South/Southeast"),
+    ("PRANAGUA", "Paranagua", "Brazil South/Southeast"),                       # source typo
     ("S�O FRANCISCO", "Sao Francisco", "Brazil South/Southeast"),   # parser drops the accented char
     ("S�O SEBASTI�O", "Sao Sebastiao", "Brazil South/Southeast"),
     ("TUBAR�O", "Tubarao", "Brazil South/Southeast"),
@@ -230,7 +235,7 @@ def test_txg_dock_is_the_facility_and_missing_dock_is_flagged():
     e, p, r, ok, _ = dim.resolve_us_elevator("TXG", "TEMCO HOUSTON DOCK 1 / ADM CORPUS CHRISTI")
     assert (e, p, r, ok) == ("TEMCO HOUSTON DOCK 1", "Houston", "Texas Gulf", True)
     e, p, r, ok, why = dim.resolve_us_elevator("TXG", "nan / ADM CORPUS CHRISTI")
-    assert not ok and r == dim.UNMAPPED and "no terminal" in why
+    assert not ok and p == dim.UNMAPPED and r == "Texas Gulf" and "no terminal" in why
 
 
 def test_every_region_in_spec_exists_and_every_mapped_port_has_a_valid_region():
