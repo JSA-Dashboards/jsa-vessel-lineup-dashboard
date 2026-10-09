@@ -7,6 +7,8 @@ from datetime import datetime
 import os
 import io
 
+import data_sync
+
 # ── JSA Brand Colors ─────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
 JSA_GREEN_LT = "#8db89a"
@@ -243,9 +245,9 @@ def _reader(file_source):
 # ── Data loading & processing ─────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def load_data(file_source, _mtime=None):
+def load_data(file_source, mtime=None):
     """Load data from a file path (str) or file-like object (uploaded bytes).
-    _mtime is passed for local files so the cache auto-busts when the file changes.
+    mtime is part of the cache key (no leading underscore: Streamlit ignores those), so the cache busts when the file changes.
     """
     US_COLS = ["ELEVATOR", "VESSEL", "ATA", "STATUS", "MT",
                "COMMODITY", "DESTINATION", "SAIL DATE"]
@@ -291,7 +293,7 @@ def load_data(file_source, _mtime=None):
 
 
 @st.cache_data(show_spinner=False)
-def load_trends_snapshot(file_source, _mtime=None):
+def load_trends_snapshot(file_source, mtime=None):
     """
     Parse the Trends sheet for commodity-level MT, weekly change, and monthly change
     for USG, PNW, and TXG.  Returns:
@@ -372,7 +374,7 @@ def load_trends_snapshot(file_source, _mtime=None):
 
 
 @st.cache_data(show_spinner=False)
-def load_brazil_data(_db_mtime=None):
+def load_brazil_data(db_mtime=None):
     """Return (lineup_df, sailed_df, summary_df) or (None, None, None)."""
     try:
         import brazil_db
@@ -789,7 +791,7 @@ def page_brazil(frames_us=None):
     import tempfile
 
     brz_mtime = os.path.getmtime(_BRZ_DB_PATH) if os.path.exists(_BRZ_DB_PATH) else None
-    lineup_all, sailed_all, summary_df = load_brazil_data(_db_mtime=brz_mtime)
+    lineup_all, sailed_all, summary_df = load_brazil_data(db_mtime=brz_mtime)
 
     # ── PDF uploader fallback ─────────────────────────────────────────────────
     if lineup_all is None or lineup_all.empty:
@@ -1148,7 +1150,18 @@ def page_brazil(frames_us=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _sync_data(app_dir):
+    """On Streamlit Cloud, fetch the newest data files from the public repo (see data_sync.py); the
+    droplet commits them daily but those pushes do not redeploy the app. Re-checked every 5 minutes."""
+    return data_sync.sync(app_dir)
+
+
 def main():
+    global REPO_FILE_PATH, _BRZ_DB_PATH
+    _data_info = _sync_data(_APP_DIR)
+    REPO_FILE_PATH = _data_info[DATA_FILENAME]["path"]
+    _BRZ_DB_PATH = _data_info["brazil_lineup.db"]["path"]
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         try:
@@ -1212,14 +1225,15 @@ def main():
         if st.button("🔄 Reload Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+        st.caption(data_sync.describe(_data_info))
 
         st.markdown("---")
         st.caption(f"Loaded: {datetime.now().strftime('%b %d · %I:%M %p')}")
 
     # ── Load ──────────────────────────────────────────────────────────────────
     with st.spinner("Loading vessel data..."):
-        frames = load_data(file_source, _mtime=file_mtime)
-        trends_regions, latest_date = load_trends_snapshot(file_source, _mtime=file_mtime)
+        frames = load_data(file_source, mtime=file_mtime)
+        trends_regions, latest_date = load_trends_snapshot(file_source, mtime=file_mtime)
 
     # ── Stale-data banner (local only) ────────────────────────────────────────
     # If the file on disk is newer than what's in cache, prompt a reload.
@@ -1266,7 +1280,7 @@ def main():
     with tabs[5]:
         st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
         import region_views
-        region_views.page_regions(dict(
+        region_views.page_regions(facts_db=_data_info["facts.db"]["path"], ui=dict(
             kpi=kpi, sec=sec, layout=BASE_LAYOUT,
             comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
             blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,

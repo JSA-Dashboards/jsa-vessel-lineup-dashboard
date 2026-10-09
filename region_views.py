@@ -25,17 +25,17 @@ LEVELS = {"Region": ["region"], "Region → Port": ["region", "port"],
 
 
 @st.cache_data(show_spinner=False)
-def _load(_mtime=None):
-    return store.load_lineup(), store.load_events()
+def _load(facts_db, mtime=None):
+    return store.load_lineup(facts_db), store.load_events(facts_db)
 
 
 @st.cache_data(show_spinner=False)
-def _forecast(weight, mode, _events, _lineup, _mtime=None):
+def _forecast(weight, mode, _events, _lineup, mtime=None):
     return fcst.run_forecast(_events, _lineup, weight=weight, mode=mode)
 
 
 @st.cache_data(show_spinner=False)
-def _backtest(elapsed, _events, _lineup, _mtime=None):
+def _backtest(elapsed, _events, _lineup, mtime=None):
     return fcst.backtest_methods(_events, _lineup, elapsed=elapsed)
 
 
@@ -344,7 +344,7 @@ def view_forecast(events, lineup, ui, mtime):
                         "Constant weight on Seasonality all month. 0 = Pace only, 1 = Seasonality only."))
     srcs = sorted(events["source"].unique())
     src_sel = c2.multiselect("Source", srcs, default=srcs, key="rf_src")
-    fc = _forecast(round(w, 4), mode, events, lineup, _mtime=mtime)
+    fc = _forecast(round(w, 4), mode, events, lineup, mtime=mtime)
     comms = sorted(fc["commodity"].unique())
     default_c = [c for c in ("Corn", "Soybeans", "Soybean Meal", "Wheat") if c in comms]
     com_sel = c3.multiselect("Commodities", comms, default=default_c, key="rf_com")
@@ -406,7 +406,7 @@ def view_forecast(events, lineup, ui, mtime):
 
     ui["sec"]("🧪  Backtest — which blend weight would have worked")
     day = st.select_slider("Project at day-of-month", options=[2, 5, 10, 15, 20, 25], value=10, key="rf_bt_day")
-    bt = _backtest(day, events, lineup, _mtime=mtime)
+    bt = _backtest(day, events, lineup, mtime=mtime)
     bt = bt[bt["commodity"].isin(com_sel) & bt["source"].isin(src_sel)]
     if bt.empty:
         st.info("Not enough history to backtest the current selection.")
@@ -440,12 +440,13 @@ def view_forecast(events, lineup, ui, mtime):
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
-def page_regions(ui):
-    if not os.path.exists(store.DB_PATH):
+def page_regions(ui, facts_db=None):
+    facts_db = facts_db or store.DB_PATH
+    if not os.path.exists(facts_db):
         st.info("facts.db has not been built yet. Run `python build_facts.py` in the app folder.")
         return
-    mtime = os.path.getmtime(store.DB_PATH)
-    lineup, events = _load(_mtime=mtime)
+    mtime = os.path.getmtime(facts_db)
+    lineup, events = _load(facts_db, mtime=mtime)
     if lineup.empty and events.empty:
         st.info("facts.db is empty. Run `python build_facts.py`.")
         return
