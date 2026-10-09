@@ -671,6 +671,28 @@ def parse_pdf(pdf_path) -> dict:
     }
 
 
+def validation_error(parsed, rel_tol=0.0, abs_tol=10):
+    """None if the parse reconciles with the totals printed in the PDF, else why not. A gap is allowed up
+    to max(abs_tol MT, rel_tol x the PDF total): the PDFs' own totals are off by a few MT of rounding,
+    while a missed vessel is tens of thousands. Missing report date or line-up total is always an error
+    (a different APS report, e.g. the Chinese report, parses to nonsense and fails here)."""
+    if parsed["report_date"] is None:
+        return "no report date"
+    v = parsed["validation"]
+    if not parsed["lineup"]:
+        return "no line-up rows"
+    for label, pdf_key, got in (("lineup", "lineup_grand_total_pdf", v["lineup_grand_total_parsed"] + v.get("lineup_excluded_pdf_mt", 0)),
+                                ("sailed", "sailed_grand_total_pdf", v["sailed_grand_total_parsed"] + v.get("sailed_excluded_pdf_mt", 0))):
+        pdf = v[pdf_key]
+        if pdf is None:
+            if label == "lineup":
+                return "no line-up grand total in the PDF"
+            continue
+        if abs(pdf - got) > max(abs_tol, rel_tol * pdf):
+            return f"{label} total {got:,} != pdf {pdf:,}"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------

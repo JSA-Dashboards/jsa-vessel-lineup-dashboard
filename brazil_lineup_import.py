@@ -142,7 +142,8 @@ def _graph_get_bytes(token, url):
 # Email matching
 # ---------------------------------------------------------------------------
 _APS_DOMAIN = "@agriportservices.com.br"
-_PDF_PATTERNS = ("APS_Brz_*.pdf", "APS Brz*.pdf")
+# Only the consolidated line-up. "APS Brz Chinese Report" / monthly reports share the prefix and must not match.
+_PDF_PATTERNS = ("aps?br*consolidated*.pdf",)
 
 
 def _attachment_name_matches(name):
@@ -272,6 +273,16 @@ def run(backfill=False):
             if rd is None:
                 log.warning(f"Could not extract report date from {att_name}, skipping")
                 continue
+
+            # Load only a parse that reconciles with the PDF's own totals. A small gap (<1%) is loaded
+            # with a warning (one vessel missed is better than a missing day); anything bigger is not.
+            strict = brazil_parser.validation_error(parsed)
+            if strict:
+                loose = brazil_parser.validation_error(parsed, rel_tol=0.01)
+                if loose:
+                    log.error(f"{att_name}: NOT loaded - {loose}")
+                    continue
+                log.warning(f"{att_name}: loaded with a small total mismatch - {strict}")
 
             rd_str = rd.isoformat() if hasattr(rd, "isoformat") else str(rd)
 
