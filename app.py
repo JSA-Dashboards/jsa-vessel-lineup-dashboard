@@ -13,22 +13,36 @@ import data_sync
 JSA_GREEN    = "#5e7164"
 JSA_GREEN_LT = "#8db89a"
 
-DM_BG       = "#0d1210"
-DM_SURFACE  = "#141c18"
-DM_SURFACE2 = "#1a2620"
-DM_BORDER   = "#253328"
-DM_TEXT     = "#e8ede9"
-DM_MUTED    = "#7a9485"
+# Dark by default. The JSA admin portal is light-only and mirrors this file with
+# VESSEL_THEME pinned to "light" (its sync's pin_env), so one file serves both.
+_LIGHT = str(os.environ.get("VESSEL_THEME") or "dark").strip().lower() == "light"
 
-COL_POS  = "#8db89a"
-COL_NEG  = "#e07070"
+if _LIGHT:
+    DM_BG       = "#f6f8f7"
+    DM_SURFACE  = "#ffffff"
+    DM_SURFACE2 = "#eef3f0"
+    DM_BORDER   = "#d7e2dc"
+    DM_TEXT     = "#32373c"
+    DM_MUTED    = "#5f7267"
+    COL_POS  = "#16a34a"
+    COL_NEG  = "#dc2626"
+    JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
+else:
+    DM_BG       = "#0d1210"
+    DM_SURFACE  = "#141c18"
+    DM_SURFACE2 = "#1a2620"
+    DM_BORDER   = "#253328"
+    DM_TEXT     = "#e8ede9"
+    DM_MUTED    = "#7a9485"
+    COL_POS  = "#8db89a"
+    COL_NEG  = "#e07070"
+    JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+
 COL_AMB  = "#c4b456"
 COL_BLUE = "#6fa8c4"
 COL_PURP = "#9b89c4"
 COL_ORG  = "#c4896a"
 COL_TEAL = "#6ac4b8"
-
-JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
 DATA_FILENAME = "Vessel Lineup - US.xlsx"
 
