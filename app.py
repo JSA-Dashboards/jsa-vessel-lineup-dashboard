@@ -887,279 +887,286 @@ def page_brazil(frames_us=None):
         "↕ Day-Over-Day",
         "🔍 Vessel Lookup",
         "🇺🇸 vs Brazil",
-    ])
+    ], on_change="rerun")
 
     # ── S1: MT by port × product ──────────────────────────────────────────────
     with s1:
-        sec(f"MT by Port & Product — {latest_date}")
-        g = (
-            cur.groupby(["port", "prod_grp"])["mt"]
-            .sum().reset_index()
-            .sort_values("mt", ascending=False)
-        )
-        g["mt_MMT"] = g["mt"] / 1e6
-        fig = px.bar(
-            g, x="port", y="mt_MMT", color="prod_grp",
-            color_discrete_map=BRZ_PROD_COLORS,
-            barmode="stack",
-            title="Lineup MT by Port & Product",
-            labels={"port": "Port", "mt_MMT": "MT (millions)", "prod_grp": "Product"},
-        )
-        fig.update_layout(**BASE_LAYOUT)
-        fig.update_traces(marker_line_width=0)
-        st.plotly_chart(fig, use_container_width=True)
+        if s1.open:
+            sec(f"MT by Port & Product — {latest_date}")
+            g = (
+                cur.groupby(["port", "prod_grp"])["mt"]
+                .sum().reset_index()
+                .sort_values("mt", ascending=False)
+            )
+            g["mt_MMT"] = g["mt"] / 1e6
+            fig = px.bar(
+                g, x="port", y="mt_MMT", color="prod_grp",
+                color_discrete_map=BRZ_PROD_COLORS,
+                barmode="stack",
+                title="Lineup MT by Port & Product",
+                labels={"port": "Port", "mt_MMT": "MT (millions)", "prod_grp": "Product"},
+            )
+            fig.update_layout(**BASE_LAYOUT)
+            fig.update_traces(marker_line_width=0)
+            st.plotly_chart(fig, use_container_width=True)
 
-        piv = (
-            cur.groupby(["port", "prod_grp"])["mt"]
-            .sum().unstack(fill_value=0)
-        )
-        piv["Total"] = piv.sum(axis=1)
-        piv = piv.sort_values("Total", ascending=False)
-        fmt_cols = {c: "{:,.0f}" for c in piv.columns}
-        st.dataframe(piv.style.format(fmt_cols), use_container_width=True)
+            piv = (
+                cur.groupby(["port", "prod_grp"])["mt"]
+                .sum().unstack(fill_value=0)
+            )
+            piv["Total"] = piv.sum(axis=1)
+            piv = piv.sort_values("Total", ascending=False)
+            fmt_cols = {c: "{:,.0f}" for c in piv.columns}
+            st.dataframe(piv.style.format(fmt_cols), use_container_width=True)
 
     # ── S2: History ───────────────────────────────────────────────────────────
     with s2:
-        sec("Lineup History — Daily MT by Product")
-        ghist = (
-            hist.groupby(["report_date", "prod_grp"])["mt"]
-            .sum().reset_index()
-        )
-        ghist["mt_MMT"] = ghist["mt"] / 1e6
-        ghist["report_date"] = pd.to_datetime(ghist["report_date"])
-        fig2 = px.bar(
-            ghist, x="report_date", y="mt_MMT", color="prod_grp",
-            color_discrete_map=BRZ_PROD_COLORS,
-            barmode="stack",
-            title="Daily Lineup MT by Product",
-            labels={"report_date": "Date", "mt_MMT": "MT (millions)", "prod_grp": "Product"},
-        )
-        fig2.update_layout(**BASE_LAYOUT)
-        fig2.update_traces(marker_line_width=0)
-        fig2.update_xaxes(tickformat="%b %d")
-        st.plotly_chart(fig2, use_container_width=True)
-
-        if sailed_all is not None and not sailed_all.empty:
-            sec("MTD Sailed History")
-            shist = (
-                sailed_all[~sailed_all["excluded"].astype(bool)]
-                .groupby(["report_date", "prod_grp"])["mt"]
+        if s2.open:
+            sec("Lineup History — Daily MT by Product")
+            ghist = (
+                hist.groupby(["report_date", "prod_grp"])["mt"]
                 .sum().reset_index()
             )
-            shist["mt_MMT"] = shist["mt"] / 1e6
-            shist["report_date"] = pd.to_datetime(shist["report_date"])
-            fig2s = px.bar(
-                shist, x="report_date", y="mt_MMT", color="prod_grp",
+            ghist["mt_MMT"] = ghist["mt"] / 1e6
+            ghist["report_date"] = pd.to_datetime(ghist["report_date"])
+            fig2 = px.bar(
+                ghist, x="report_date", y="mt_MMT", color="prod_grp",
                 color_discrete_map=BRZ_PROD_COLORS,
                 barmode="stack",
-                title="MTD Sailed MT by Product",
+                title="Daily Lineup MT by Product",
                 labels={"report_date": "Date", "mt_MMT": "MT (millions)", "prod_grp": "Product"},
             )
-            fig2s.update_layout(**BASE_LAYOUT)
-            fig2s.update_traces(marker_line_width=0)
-            fig2s.update_xaxes(tickformat="%b %d")
-            st.plotly_chart(fig2s, use_container_width=True)
+            fig2.update_layout(**BASE_LAYOUT)
+            fig2.update_traces(marker_line_width=0)
+            fig2.update_xaxes(tickformat="%b %d")
+            st.plotly_chart(fig2, use_container_width=True)
+
+            if sailed_all is not None and not sailed_all.empty:
+                sec("MTD Sailed History")
+                shist = (
+                    sailed_all[~sailed_all["excluded"].astype(bool)]
+                    .groupby(["report_date", "prod_grp"])["mt"]
+                    .sum().reset_index()
+                )
+                shist["mt_MMT"] = shist["mt"] / 1e6
+                shist["report_date"] = pd.to_datetime(shist["report_date"])
+                fig2s = px.bar(
+                    shist, x="report_date", y="mt_MMT", color="prod_grp",
+                    color_discrete_map=BRZ_PROD_COLORS,
+                    barmode="stack",
+                    title="MTD Sailed MT by Product",
+                    labels={"report_date": "Date", "mt_MMT": "MT (millions)", "prod_grp": "Product"},
+                )
+                fig2s.update_layout(**BASE_LAYOUT)
+                fig2s.update_traces(marker_line_width=0)
+                fig2s.update_xaxes(tickformat="%b %d")
+                st.plotly_chart(fig2s, use_container_width=True)
 
     # ── S3: Congestion ────────────────────────────────────────────────────────
     with s3:
-        sec(f"Congestion — Wait Times by Port — {latest_date}")
-        wt = cur[cur["wt_days"].notna() & (cur["wt_days"] > 0)].copy()
-        if wt.empty:
-            st.info("No wait-time data for this report.")
-        else:
-            gw = (
-                wt.groupby("port")["wt_days"]
-                .agg(Avg_WT="mean", Max_WT="max", Vessels="count")
-                .reset_index()
-                .sort_values("Avg_WT", ascending=False)
-            )
-            fig3 = px.bar(
-                gw, x="port", y="Avg_WT", color="Vessels",
-                color_continuous_scale=[[0, JSA_GREEN], [1, COL_NEG]],
-                title="Average Wait Days by Port",
-                labels={"port": "Port", "Avg_WT": "Avg WT (days)", "Vessels": "# Vessels"},
-                text=gw["Avg_WT"].round(1),
-            )
-            fig3.update_layout(**BASE_LAYOUT, coloraxis_showscale=False)
-            fig3.update_traces(marker_line_width=0, textposition="outside")
-            st.plotly_chart(fig3, use_container_width=True)
-            st.dataframe(
-                gw.rename(columns={"port": "Port"}).set_index("Port")
-                .style.format({"Avg_WT": "{:.1f}", "Max_WT": "{:.0f}"}),
-                use_container_width=True,
-            )
+        if s3.open:
+            sec(f"Congestion — Wait Times by Port — {latest_date}")
+            wt = cur[cur["wt_days"].notna() & (cur["wt_days"] > 0)].copy()
+            if wt.empty:
+                st.info("No wait-time data for this report.")
+            else:
+                gw = (
+                    wt.groupby("port")["wt_days"]
+                    .agg(Avg_WT="mean", Max_WT="max", Vessels="count")
+                    .reset_index()
+                    .sort_values("Avg_WT", ascending=False)
+                )
+                fig3 = px.bar(
+                    gw, x="port", y="Avg_WT", color="Vessels",
+                    color_continuous_scale=[[0, JSA_GREEN], [1, COL_NEG]],
+                    title="Average Wait Days by Port",
+                    labels={"port": "Port", "Avg_WT": "Avg WT (days)", "Vessels": "# Vessels"},
+                    text=gw["Avg_WT"].round(1),
+                )
+                fig3.update_layout(**BASE_LAYOUT, coloraxis_showscale=False)
+                fig3.update_traces(marker_line_width=0, textposition="outside")
+                st.plotly_chart(fig3, use_container_width=True)
+                st.dataframe(
+                    gw.rename(columns={"port": "Port"}).set_index("Port")
+                    .style.format({"Avg_WT": "{:.1f}", "Max_WT": "{:.0f}"}),
+                    use_container_width=True,
+                )
 
     # ── S4: Destinations ──────────────────────────────────────────────────────
     with s4:
-        sec(f"Destination Mix — {latest_date}")
-        gdest = (
-            cur.groupby("destination")["mt"]
-            .sum().reset_index()
-            .sort_values("mt", ascending=False)
-            .head(15)
-        )
-        gdest["mt_MMT"] = gdest["mt"] / 1e6
-        gdest["destination"] = gdest["destination"].fillna("Unknown")
-        fig4 = px.bar(
-            gdest, x="destination", y="mt_MMT",
-            title="Top Destinations by MT",
-            labels={"destination": "Destination", "mt_MMT": "MT (millions)"},
-            color_discrete_sequence=[JSA_GREEN_LT],
-        )
-        fig4.update_layout(**BASE_LAYOUT)
-        fig4.update_traces(marker_line_width=0)
-        st.plotly_chart(fig4, use_container_width=True)
-
-        # SBS destination breakdown
-        sbs_dest = (
-            cur[cur["product"] == "SBS"]
-            .groupby("destination")["mt"]
-            .sum().reset_index()
-            .sort_values("mt", ascending=False)
-            .head(10)
-        )
-        if not sbs_dest.empty:
-            sec("SBS Destination Breakdown")
-            sbs_dest["mt_MMT"] = sbs_dest["mt"] / 1e6
-            sbs_dest["destination"] = sbs_dest["destination"].fillna("Unknown")
-            fig4s = px.pie(
-                sbs_dest, names="destination", values="mt_MMT",
-                title="SBS MT by Destination",
-                color_discrete_sequence=px.colors.sequential.Greens_r,
+        if s4.open:
+            sec(f"Destination Mix — {latest_date}")
+            gdest = (
+                cur.groupby("destination")["mt"]
+                .sum().reset_index()
+                .sort_values("mt", ascending=False)
+                .head(15)
             )
-            fig4s.update_layout(**BASE_LAYOUT)
-            st.plotly_chart(fig4s, use_container_width=True)
+            gdest["mt_MMT"] = gdest["mt"] / 1e6
+            gdest["destination"] = gdest["destination"].fillna("Unknown")
+            fig4 = px.bar(
+                gdest, x="destination", y="mt_MMT",
+                title="Top Destinations by MT",
+                labels={"destination": "Destination", "mt_MMT": "MT (millions)"},
+                color_discrete_sequence=[JSA_GREEN_LT],
+            )
+            fig4.update_layout(**BASE_LAYOUT)
+            fig4.update_traces(marker_line_width=0)
+            st.plotly_chart(fig4, use_container_width=True)
+
+            # SBS destination breakdown
+            sbs_dest = (
+                cur[cur["product"] == "SBS"]
+                .groupby("destination")["mt"]
+                .sum().reset_index()
+                .sort_values("mt", ascending=False)
+                .head(10)
+            )
+            if not sbs_dest.empty:
+                sec("SBS Destination Breakdown")
+                sbs_dest["mt_MMT"] = sbs_dest["mt"] / 1e6
+                sbs_dest["destination"] = sbs_dest["destination"].fillna("Unknown")
+                fig4s = px.pie(
+                    sbs_dest, names="destination", values="mt_MMT",
+                    title="SBS MT by Destination",
+                    color_discrete_sequence=px.colors.sequential.Greens_r,
+                )
+                fig4s.update_layout(**BASE_LAYOUT)
+                st.plotly_chart(fig4s, use_container_width=True)
 
     # ── S5: Day-over-Day ─────────────────────────────────────────────────────
     with s5:
-        if len(date_objs) < 2:
-            st.info("Need at least 2 report dates for day-over-day comparison.")
-        else:
-            prev_date = date_objs[1]
-            sec(f"Day-Over-Day: {prev_date} → {latest_date}")
+        if s5.open:
+            if len(date_objs) < 2:
+                st.info("Need at least 2 report dates for day-over-day comparison.")
+            else:
+                prev_date = date_objs[1]
+                sec(f"Day-Over-Day: {prev_date} → {latest_date}")
 
-            prev  = _active(lineup_all, prev_date)
-            cur5  = cur
+                prev  = _active(lineup_all, prev_date)
+                cur5  = cur
 
-            # By port × product
-            def _port_prod_mt(df):
-                return (
-                    df.groupby(["port", "prod_grp"])["mt"]
-                    .sum().reset_index().rename(columns={"mt": "MT"})
+                # By port × product
+                def _port_prod_mt(df):
+                    return (
+                        df.groupby(["port", "prod_grp"])["mt"]
+                        .sum().reset_index().rename(columns={"mt": "MT"})
+                    )
+
+                pp_cur  = _port_prod_mt(cur5)
+                pp_prev = _port_prod_mt(prev)
+                merged = pp_cur.merge(
+                    pp_prev, on=["port", "prod_grp"], how="outer",
+                    suffixes=("_new", "_old"),
+                ).fillna(0)
+                merged["delta"] = merged["MT_new"] - merged["MT_old"]
+                merged["delta_MMT"] = merged["delta"] / 1e6
+
+                fig5 = px.bar(
+                    merged[merged["delta"] != 0].sort_values("delta", ascending=False),
+                    x="prod_grp", y="delta_MMT", color="port",
+                    barmode="group",
+                    title="MT Change by Product & Port",
+                    labels={"prod_grp": "Product", "delta_MMT": "MT Change (millions)", "port": "Port"},
                 )
+                fig5.update_layout(**BASE_LAYOUT)
+                fig5.update_traces(marker_line_width=0)
+                st.plotly_chart(fig5, use_container_width=True)
 
-            pp_cur  = _port_prod_mt(cur5)
-            pp_prev = _port_prod_mt(prev)
-            merged = pp_cur.merge(
-                pp_prev, on=["port", "prod_grp"], how="outer",
-                suffixes=("_new", "_old"),
-            ).fillna(0)
-            merged["delta"] = merged["MT_new"] - merged["MT_old"]
-            merged["delta_MMT"] = merged["delta"] / 1e6
+                # New / departed vessels
+                vessels_new  = set(cur5["vessel"]) - set(prev["vessel"])
+                vessels_gone = set(prev["vessel"]) - set(cur5["vessel"])
 
-            fig5 = px.bar(
-                merged[merged["delta"] != 0].sort_values("delta", ascending=False),
-                x="prod_grp", y="delta_MMT", color="port",
-                barmode="group",
-                title="MT Change by Product & Port",
-                labels={"prod_grp": "Product", "delta_MMT": "MT Change (millions)", "port": "Port"},
-            )
-            fig5.update_layout(**BASE_LAYOUT)
-            fig5.update_traces(marker_line_width=0)
-            st.plotly_chart(fig5, use_container_width=True)
-
-            # New / departed vessels
-            vessels_new  = set(cur5["vessel"]) - set(prev["vessel"])
-            vessels_gone = set(prev["vessel"]) - set(cur5["vessel"])
-
-            c5a, c5b = st.columns(2)
-            with c5a:
-                sec(f"New Vessels ({len(vessels_new)})")
-                if vessels_new:
-                    new_df = cur5[cur5["vessel"].isin(vessels_new)][
-                        ["vessel", "port", "product", "mt", "status"]
-                    ].drop_duplicates("vessel")
-                    st.dataframe(new_df, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("None")
-            with c5b:
-                sec(f"Departed Vessels ({len(vessels_gone)})")
-                if vessels_gone:
-                    gone_df = prev[prev["vessel"].isin(vessels_gone)][
-                        ["vessel", "port", "product", "mt", "status"]
-                    ].drop_duplicates("vessel")
-                    st.dataframe(gone_df, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("None")
+                c5a, c5b = st.columns(2)
+                with c5a:
+                    sec(f"New Vessels ({len(vessels_new)})")
+                    if vessels_new:
+                        new_df = cur5[cur5["vessel"].isin(vessels_new)][
+                            ["vessel", "port", "product", "mt", "status"]
+                        ].drop_duplicates("vessel")
+                        st.dataframe(new_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("None")
+                with c5b:
+                    sec(f"Departed Vessels ({len(vessels_gone)})")
+                    if vessels_gone:
+                        gone_df = prev[prev["vessel"].isin(vessels_gone)][
+                            ["vessel", "port", "product", "mt", "status"]
+                        ].drop_duplicates("vessel")
+                        st.dataframe(gone_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("None")
 
     # ── S6: Vessel Lookup ─────────────────────────────────────────────────────
     with s6:
-        sec("Vessel Status Path Across Reports")
-        query = st.text_input("Search vessel name (partial match, case-insensitive)")
-        if query:
-            mask = lineup_all["vessel"].str.upper().str.contains(query.upper(), na=False)
-            smask = sailed_all["vessel"].str.upper().str.contains(query.upper(), na=False) if sailed_all is not None else pd.Series([], dtype=bool)
-            hits = pd.concat([
-                lineup_all[mask],
-                sailed_all[smask] if sailed_all is not None else pd.DataFrame(),
-            ], ignore_index=True)
-            if hits.empty:
-                st.info("No matching vessels found.")
-            else:
-                vessels = sorted(hits["vessel"].unique())
-                sel = st.selectbox("Select vessel", vessels)
-                vdf = hits[hits["vessel"] == sel].sort_values("report_date")[
-                    ["report_date", "port", "berth", "status", "product", "mt", "wt_days", "destination"]
-                ]
-                st.dataframe(vdf, use_container_width=True, hide_index=True)
+        if s6.open:
+            sec("Vessel Status Path Across Reports")
+            query = st.text_input("Search vessel name (partial match, case-insensitive)")
+            if query:
+                mask = lineup_all["vessel"].str.upper().str.contains(query.upper(), na=False)
+                smask = sailed_all["vessel"].str.upper().str.contains(query.upper(), na=False) if sailed_all is not None else pd.Series([], dtype=bool)
+                hits = pd.concat([
+                    lineup_all[mask],
+                    sailed_all[smask] if sailed_all is not None else pd.DataFrame(),
+                ], ignore_index=True)
+                if hits.empty:
+                    st.info("No matching vessels found.")
+                else:
+                    vessels = sorted(hits["vessel"].unique())
+                    sel = st.selectbox("Select vessel", vessels)
+                    vdf = hits[hits["vessel"] == sel].sort_values("report_date")[
+                        ["report_date", "port", "berth", "status", "product", "mt", "wt_days", "destination"]
+                    ]
+                    st.dataframe(vdf, use_container_width=True, hide_index=True)
 
     # ── S7: Brazil vs US ──────────────────────────────────────────────────────
     with s7:
-        sec("Brazil vs US Lineup Comparison")
+        if s7.open:
+            sec("Brazil vs US Lineup Comparison")
 
-        brz_total = total_mt
-        us_total_kmt = 0.0
-        if frames_us:
-            for df in frames_us.values():
-                lined = df[~df["SAILED"]]
-                us_total_kmt += lined["MT_kMT"].sum()
-        us_total_mt = us_total_kmt * 1000
+            brz_total = total_mt
+            us_total_kmt = 0.0
+            if frames_us:
+                for df in frames_us.values():
+                    lined = df[~df["SAILED"]]
+                    us_total_kmt += lined["MT_kMT"].sum()
+            us_total_mt = us_total_kmt * 1000
 
-        c7a, c7b = st.columns(2)
-        kpi(c7a, "Brazil Lineup MT", f"{brz_total/1e6:.2f}M MT",
-            f"{latest_date}", COL_AMB)
-        kpi(c7b, "US Lineup MT (known)",
-            f"{us_total_mt/1e6:.2f}M MT" if us_total_mt > 0 else "N/A",
-            "USG + PNW + TXG (excl. RVT)", COL_BLUE)
+            c7a, c7b = st.columns(2)
+            kpi(c7a, "Brazil Lineup MT", f"{brz_total/1e6:.2f}M MT",
+                f"{latest_date}", COL_AMB)
+            kpi(c7b, "US Lineup MT (known)",
+                f"{us_total_mt/1e6:.2f}M MT" if us_total_mt > 0 else "N/A",
+                "USG + PNW + TXG (excl. RVT)", COL_BLUE)
 
-        cmp = pd.DataFrame([
-            {"Region": "Brazil",  "MT_M": brz_total / 1e6},
-            {"Region": "US Gulf + PNW + TXG", "MT_M": us_total_mt / 1e6},
-        ])
-        fig7 = px.bar(
-            cmp, x="Region", y="MT_M",
-            color="Region",
-            color_discrete_sequence=[COL_AMB, COL_BLUE],
-            title="Lineup MT Comparison",
-            labels={"Region": "", "MT_M": "MT (millions)"},
-        )
-        fig7.update_layout(**BASE_LAYOUT, showlegend=False)
-        fig7.update_traces(marker_line_width=0)
-        st.plotly_chart(fig7, use_container_width=True)
+            cmp = pd.DataFrame([
+                {"Region": "Brazil",  "MT_M": brz_total / 1e6},
+                {"Region": "US Gulf + PNW + TXG", "MT_M": us_total_mt / 1e6},
+            ])
+            fig7 = px.bar(
+                cmp, x="Region", y="MT_M",
+                color="Region",
+                color_discrete_sequence=[COL_AMB, COL_BLUE],
+                title="Lineup MT Comparison",
+                labels={"Region": "", "MT_M": "MT (millions)"},
+            )
+            fig7.update_layout(**BASE_LAYOUT, showlegend=False)
+            fig7.update_traces(marker_line_width=0)
+            st.plotly_chart(fig7, use_container_width=True)
 
-        # Brazil product breakdown
-        sec("Brazil Lineup by Product")
-        gp = cur.groupby("prod_grp")["mt"].sum().reset_index().sort_values("mt", ascending=False)
-        gp["mt_MMT"] = gp["mt"] / 1e6
-        fig7b = px.bar(
-            gp, x="prod_grp", y="mt_MMT",
-            color="prod_grp", color_discrete_map=BRZ_PROD_COLORS,
-            title="Brazil Lineup by Product",
-            labels={"prod_grp": "Product", "mt_MMT": "MT (millions)"},
-        )
-        fig7b.update_layout(**BASE_LAYOUT, showlegend=False)
-        fig7b.update_traces(marker_line_width=0)
-        st.plotly_chart(fig7b, use_container_width=True)
+            # Brazil product breakdown
+            sec("Brazil Lineup by Product")
+            gp = cur.groupby("prod_grp")["mt"].sum().reset_index().sort_values("mt", ascending=False)
+            gp["mt_MMT"] = gp["mt"] / 1e6
+            fig7b = px.bar(
+                gp, x="prod_grp", y="mt_MMT",
+                color="prod_grp", color_discrete_map=BRZ_PROD_COLORS,
+                title="Brazil Lineup by Product",
+                labels={"prod_grp": "Product", "mt_MMT": "MT (millions)"},
+            )
+            fig7b.update_layout(**BASE_LAYOUT, showlegend=False)
+            fig7b.update_traces(marker_line_width=0)
+            st.plotly_chart(fig7b, use_container_width=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1270,35 +1277,41 @@ def main():
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil", "🧭 Regions"])
+    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil", "🧭 Regions"], on_change="rerun")
 
     with tabs[0]:
-        page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
+        if tabs[0].open:
+            page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
 
     with tabs[1]:
-        st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
-        page_us(frames["USG"], "USG", n_months)
+        if tabs[1].open:
+            st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
+            page_us(frames["USG"], "USG", n_months)
 
     with tabs[2]:
-        st.markdown("<h2>Pacific Northwest &nbsp;(PNW)</h2>", unsafe_allow_html=True)
-        page_us(frames["PNW"], "PNW", n_months)
+        if tabs[2].open:
+            st.markdown("<h2>Pacific Northwest &nbsp;(PNW)</h2>", unsafe_allow_html=True)
+            page_us(frames["PNW"], "PNW", n_months)
 
     with tabs[3]:
-        st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
-        page_us(frames["TXG"], "TXG", n_months)
+        if tabs[3].open:
+            st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
+            page_us(frames["TXG"], "TXG", n_months)
 
     with tabs[4]:
-        st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
-        page_brazil(frames_us=frames)
+        if tabs[4].open:
+            st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
+            page_brazil(frames_us=frames)
 
     with tabs[5]:
-        st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
-        import region_views
-        region_views.page_regions(facts_db=_data_info["facts.db"]["path"], ui=dict(
-            kpi=kpi, sec=sec, layout=BASE_LAYOUT,
-            comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
-            blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
-        ))
+        if tabs[5].open:
+            st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
+            import region_views
+            region_views.page_regions(facts_db=_data_info["facts.db"]["path"], ui=dict(
+                kpi=kpi, sec=sec, layout=BASE_LAYOUT,
+                comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
+                blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
+            ))
 
     # ── Disclaimer footer ─────────────────────────────────────────────────────
     current_year = datetime.now().year
