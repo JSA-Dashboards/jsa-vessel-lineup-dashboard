@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import msal
@@ -143,44 +144,46 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def find_new_southport_email(token, inbox_user, last_id):
-    # Note: $filter + $orderby together returns 400; filter hasAttachments in Python
-    data = graph_get(
-        token,
-        "/users/" + inbox_user + "/mailFolders/inbox/messages",
-        **{
-            "$top": "25",
-            "$select": "id,subject,receivedDateTime,from,hasAttachments",
-            "$orderby": "receivedDateTime desc",
-        }
-    )
-    for msg in data.get("value", []):
-        mid         = msg["id"]
-        subj        = msg.get("subject", "")
-        recv        = msg.get("receivedDateTime", "")
-        sender_name = msg.get("from", {}).get("emailAddress", {}).get("name", "")
-        sender_addr = msg.get("from", {}).get("emailAddress", {}).get("address", "")
+def _page(token, url, params=None):
+    r = requests.get(url, headers={"Authorization": "Bearer " + token}, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
-        if mid == last_id:
+
+def find_new_southport_emails(token, inbox_user, processed_ids, days=4, max_pages=20):
+    """Every Southport line-up email from the last `days` days that has not been processed, OLDEST FIRST.
+    Scans by date, not by 'newest N': the Inbox takes ~200 messages a day, so a Southport file that arrived
+    in the morning is buried far below the newest 25 by the time the poller runs (the Oct 13 file sat at
+    position 193). [(message id, subject, received, attachment id, attachment name)]"""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = GRAPH + "/users/" + inbox_user + "/mailFolders/inbox/messages"
+    params = {"$filter": "receivedDateTime ge " + since, "$orderby": "receivedDateTime desc", "$top": "100",
+              "$select": "id,subject,receivedDateTime,from,hasAttachments"}
+    found = []
+    for _ in range(max_pages):
+        data = _page(token, url, params)
+        params = None
+        for msg in data.get("value", []):
+            mid = msg["id"]
+            if mid in processed_ids or not msg.get("hasAttachments"):
+                continue
+            subj = msg.get("subject") or ""
+            addr = (msg.get("from") or {}).get("emailAddress", {})
+            if "southport" not in ((addr.get("name") or "") + " " + (addr.get("address") or "")).lower() \
+                    and "southport" not in subj.lower():
+                continue
+            atts = graph_get(token, "/users/" + inbox_user + "/messages/" + mid + "/attachments",
+                             **{"$select": "id,name"}).get("value", [])
+            xlsx = [a for a in atts if a.get("name", "").lower().endswith(".xlsx")]
+            if not xlsx:
+                continue
+            xlsx.sort(key=lambda a: "southport" not in a["name"].lower())      # prefer the SOUTHPORT LINEUP file
+            log.info("Candidate: [%s] (%s) -> %s", subj, msg.get("receivedDateTime", ""), xlsx[0]["name"])
+            found.append((mid, subj, msg.get("receivedDateTime", ""), xlsx[0]["id"], xlsx[0]["name"]))
+        url = data.get("@odata.nextLink")
+        if not url:
             break
-
-        if not msg.get("hasAttachments"):
-            continue
-
-        combined = (sender_name + " " + sender_addr).lower()
-        if "southport" not in combined and "southport" not in subj.lower():
-            continue
-
-        log.info("Candidate: [%s] from %s (%s)", subj, sender_name, recv)
-
-        att_data = graph_get(token,
-            "/users/" + inbox_user + "/messages/" + mid + "/attachments",
-            **{"$select": "id,name"})
-        for att in att_data.get("value", []):
-            if att.get("name", "").lower().endswith(".xlsx"):
-                return mid, subj, recv, att["id"], att["name"]
-
-    return None, None, None, None, None
+    return sorted(found, key=lambda x: x[2])
 
 
 def download_attachment(token, inbox_user, msg_id, att_id):
@@ -271,28 +274,40 @@ def main():
     state = load_state()
     log.info("Polling inbox: %s", cfg["GRAPH_INBOX_USER"])
 
-    token = get_token(cfg)
-    msg_id, subject, recv_time, att_id, att_name = find_new_southport_email(
-        token, cfg["GRAPH_INBOX_USER"], state.get("last_processed_id")
-    )
+    processed = set(state.get("processed_ids", []))
+    if state.get("last_processed_id"):
+        processed.add(state["last_processed_id"])
 
-    if msg_id is None:
+    token = get_token(cfg)
+    emails = find_new_southport_emails(token, cfg["GRAPH_INBOX_USER"], processed)
+
+    if not emails:
         log.info("No new Southport emails found.")
         return
 
-    log.info("New email: [%s]  attachment: %s", subject, att_name)
-    tmp = download_attachment(token, cfg["GRAPH_INBOX_USER"], msg_id, att_id)
-    try:
-        with facts_lock():
-            run_converter(tmp)
-            update_facts(tmp, att_name, recv_time)
-            git_push(subject)
-        state["last_processed_id"]   = msg_id
-        state["last_processed_time"] = recv_time
+    log.info("%d new Southport email(s): %s", len(emails), "; ".join(e[4] for e in emails))
+    done, last = [], None
+    with facts_lock():
+        for msg_id, subject, recv_time, att_id, att_name in emails:         # oldest first: the workbook ends up as the newest
+            tmp = download_attachment(token, cfg["GRAPH_INBOX_USER"], msg_id, att_id)
+            try:
+                run_converter(tmp)
+                update_facts(tmp, att_name, recv_time)
+                done.append(msg_id)
+                last = (msg_id, subject, recv_time)
+            except Exception:
+                log.exception("Could not process %s; it will be retried next run", att_name)
+                break                                                       # keep order: do not skip past a failure
+            finally:
+                tmp.unlink(missing_ok=True)
+        if last:
+            git_push(last[1])
+    if last:
+        processed.update(done)
+        state["processed_ids"] = sorted(processed)[-500:]
+        state["last_processed_id"], state["last_processed_time"] = last[0], last[2]
         save_state(state)
-        log.info("Done. State updated.")
-    finally:
-        tmp.unlink(missing_ok=True)
+        log.info("Done. %d file(s) processed; state updated.", len(done))
 
 
 if __name__ == "__main__":

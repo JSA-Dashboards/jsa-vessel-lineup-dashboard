@@ -15,7 +15,8 @@ import logging
 import os
 import sys
 import tempfile
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -202,16 +203,24 @@ def run(backfill=False):
     inbox_user = os.environ["GRAPH_INBOX_USER"]
     base = f"https://graph.microsoft.com/v1.0/users/{inbox_user}"
 
-    # Fetch top 50 emails (no $filter – Graph 400s on filter+orderby)
+    # Scan by date, not "newest 50": the inbox takes ~200 messages a day, so a PDF that arrived in the
+    # afternoon can be buried by the next morning's run. $filter + $orderby on the SAME property works.
+    since = (datetime.utcnow() - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
     msgs_url = f"{base}/mailFolders/inbox/messages"
     params = {
-        "$top": 50,
+        "$filter": f"receivedDateTime ge {since}",
         "$orderby": "receivedDateTime desc",
+        "$top": 100,
         "$select": "id,subject,hasAttachments,from,bodyPreview,receivedDateTime",
     }
-    data = _graph_get(token, msgs_url, params)
-    messages = data.get("value", [])
-    log.info(f"Fetched {len(messages)} inbox messages")
+    messages, url = [], msgs_url
+    for _ in range(20):
+        data = _graph_get(token, url, params)
+        messages += data.get("value", [])
+        url, params = data.get("@odata.nextLink"), None
+        if not url:
+            break
+    log.info(f"Fetched {len(messages)} inbox messages from the last 4 days")
 
     state = _load_state()
     last_id = state["last_processed_id"]
@@ -220,11 +229,6 @@ def run(backfill=False):
 
     for msg in messages:
         msg_id = msg["id"]
-
-        # Non-backfill: stop at previously seen ID
-        if not backfill and last_id and msg_id == last_id:
-            log.info(f"Reached last processed message {msg_id[:16]}…, stopping")
-            break
 
         if not _email_is_candidate(msg):
             continue
@@ -242,6 +246,9 @@ def run(backfill=False):
             if not _attachment_name_matches(att_name):
                 continue
 
+            m = re.search(r"(\d{4})[._-](\d{2})[._-](\d{2})", att_name)
+            if m and brazil_db.date_loaded(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", DB_FILE):
+                continue                                                     # already in the DB: no download, no parse
             log.info(f"Processing attachment: {att_name} (msg {msg_id[:16]}…)")
 
             # Download attachment bytes
