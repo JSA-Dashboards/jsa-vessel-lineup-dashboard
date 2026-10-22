@@ -174,10 +174,11 @@ def find_new_southport_emails(token, inbox_user, processed_ids, days=4, max_page
                 continue
             atts = graph_get(token, "/users/" + inbox_user + "/messages/" + mid + "/attachments",
                              **{"$select": "id,name"}).get("value", [])
-            xlsx = [a for a in atts if a.get("name", "").lower().endswith(".xlsx")]
+            # only the daily line-up workbook: Southport also forwards monthly STATS & CHARTS workbooks, which are
+            # not line-ups and cannot be converted (one of them once blocked the real line-up behind it)
+            xlsx = [a for a in atts if a.get("name", "").lower().endswith(".xlsx") and "lineup" in a.get("name", "").lower().replace(" ", "").replace("-", "")]
             if not xlsx:
                 continue
-            xlsx.sort(key=lambda a: "southport" not in a["name"].lower())      # prefer the SOUTHPORT LINEUP file
             log.info("Candidate: [%s] (%s) -> %s", subj, msg.get("receivedDateTime", ""), xlsx[0]["name"])
             found.append((mid, subj, msg.get("receivedDateTime", ""), xlsx[0]["id"], xlsx[0]["name"]))
         url = data.get("@odata.nextLink")
@@ -297,7 +298,7 @@ def main():
                 last = (msg_id, subject, recv_time)
             except Exception:
                 log.exception("Could not process %s; it will be retried next run", att_name)
-                break                                                       # keep order: do not skip past a failure
+                continue                                                    # one bad file must not block the newer ones
             finally:
                 tmp.unlink(missing_ok=True)
         if last:

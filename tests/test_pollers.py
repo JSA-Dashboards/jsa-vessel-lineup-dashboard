@@ -29,16 +29,17 @@ def fake_graph(monkeypatch):
     pages = [{"value": inbox[:100], "@odata.nextLink": "next"}, {"value": inbox[100:]}]
     calls = iter(pages)
     monkeypatch.setattr(sp, "_page", lambda token, url, params=None: next(calls))
-    monkeypatch.setattr(sp, "graph_get", lambda token, path, **kw: {"value": [
-        {"id": "a1", "name": "ignore.xlsx"}, {"id": "a2", "name": "SOUTHPORT LINEUP 10.13.2026.xlsx"}]})
+    stats = {"m201"}                                                         # a monthly STATS workbook, not a line-up
+    monkeypatch.setattr(sp, "graph_get", lambda token, path, **kw: {"value": (
+        [{"id": "s1", "name": "PNW STATS SEPT 2026.xlsx"}] if any(m in path for m in stats) else
+        [{"id": "a1", "name": "ignore.xlsx"}, {"id": "a2", "name": "SOUTHPORT LINEUP 10.13.2026.xlsx"}])})
 
 
 def test_finds_a_southport_file_deep_in_the_inbox_oldest_first(fake_graph):
     out = sp.find_new_southport_emails("t", "u", set())
-    assert [e[0] for e in out] == ["m201", "m200"]                  # oldest first
-    assert out[1][3:] == ("a2", "SOUTHPORT LINEUP 10.13.2026.xlsx")  # prefers the SOUTHPORT attachment
+    assert [e[0] for e in out] == ["m200"]                           # the STATS-only message is not a line-up
+    assert out[0][3:] == ("a2", "SOUTHPORT LINEUP 10.13.2026.xlsx")
 
 
 def test_skips_already_processed_messages(fake_graph):
-    out = sp.find_new_southport_emails("t", "u", {"m200"})
-    assert [e[0] for e in out] == ["m201"]
+    assert sp.find_new_southport_emails("t", "u", {"m200"}) == []
