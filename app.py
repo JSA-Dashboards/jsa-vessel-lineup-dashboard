@@ -13,9 +13,9 @@ import data_sync
 JSA_GREEN    = "#5e7164"
 JSA_GREEN_LT = "#8db89a"
 
-# Dark by default. The JSA admin portal is light-only and mirrors this file with
-# VESSEL_THEME pinned to "light" (its sync's pin_env), so one file serves both.
-_LIGHT = str(os.environ.get("VESSEL_THEME") or "dark").strip().lower() == "light"
+# Light by default (VESSEL_THEME=dark brings the old dark palette back). The JSA admin portal is light-only
+# and mirrors this file with VESSEL_THEME pinned to "light" (its sync's pin_env), so one file serves both.
+_LIGHT = str(os.environ.get("VESSEL_THEME") or "light").strip().lower() != "dark"
 
 if _LIGHT:
     DM_BG       = "#f6f8f7"
@@ -141,7 +141,7 @@ h1, h2, h3, h4 {{ color: {DM_TEXT}; }}
 }}
 .stTabs [aria-selected="true"] {{
     background: {JSA_GREEN} !important;
-    color: {DM_TEXT} !important;
+    color: {"#ffffff" if _LIGHT else DM_TEXT} !important;
 }}
 
 /* ── KPI cards ── */
@@ -1193,13 +1193,6 @@ def main():
         st.markdown("## 🚢 Vessel Lineup")
         st.markdown("---")
 
-        n_months = st.slider(
-            "Shipped History Window",
-            min_value=3, max_value=24, value=12, step=1,
-            help="Number of months of sailed history to display",
-        )
-        st.markdown("---")
-
         # ── File source priority ──────────────────────────────────────────────
         # 1. Repo copy (same folder as app.py) — works on Streamlit Cloud + local
         # 2. Original OneDrive source path — local fallback
@@ -1251,11 +1244,6 @@ def main():
         st.markdown("---")
         st.caption(f"Loaded: {datetime.now().strftime('%b %d · %I:%M %p')}")
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    with st.spinner("Loading vessel data..."):
-        frames = load_data(file_source, mtime=file_mtime)
-        trends_regions, latest_date = load_trends_snapshot(file_source, mtime=file_mtime)
-
     # ── Stale-data banner (local only) ────────────────────────────────────────
     # If the file on disk is newer than what's in cache, prompt a reload.
     if local_available and file_mtime is not None:
@@ -1272,46 +1260,56 @@ def main():
     st.markdown(
         "<h1 style='margin-bottom:2px;'>🚢 Vessel Lineup Dashboard</h1>"
         f"<p style='color:{DM_MUTED}; margin-top:0; margin-bottom:18px;'>"
-        "US Gulf &nbsp;·&nbsp; Pacific Northwest &nbsp;·&nbsp; Texas Gulf"
-        " &nbsp;·&nbsp; Brazil</p>",
+        "United States &nbsp;·&nbsp; Brazil &nbsp;·&nbsp; Argentina</p>",
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil", "🧭 Regions"], on_change="rerun")
+    facts_db = _data_info["facts.db"]["path"]
+    tabs = st.tabs(["📊 Summary", "🇺🇸 United States", "🇧🇷 Brazil", "🇦🇷 Argentina", "🧭 Forecast & execution", "🗂 Legacy views"],
+                   on_change="rerun")
 
     with tabs[0]:
         if tabs[0].open:
-            page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
+            import overview
+            overview.page_summary(facts_db)
 
-    with tabs[1]:
-        if tabs[1].open:
-            st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
-            page_us(frames["USG"], "USG", n_months)
-
-    with tabs[2]:
-        if tabs[2].open:
-            st.markdown("<h2>Pacific Northwest &nbsp;(PNW)</h2>", unsafe_allow_html=True)
-            page_us(frames["PNW"], "PNW", n_months)
-
-    with tabs[3]:
-        if tabs[3].open:
-            st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
-            page_us(frames["TXG"], "TXG", n_months)
+    for i, country in ((1, "United States"), (2, "Brazil"), (3, "Argentina")):
+        with tabs[i]:
+            if tabs[i].open:
+                import overview
+                overview.page_country(country, facts_db)
 
     with tabs[4]:
         if tabs[4].open:
-            st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
-            page_brazil(frames_us=frames)
-
-    with tabs[5]:
-        if tabs[5].open:
-            st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
+            st.markdown("<h2>Forecast &amp; execution</h2>", unsafe_allow_html=True)
             import region_views
-            region_views.page_regions(facts_db=_data_info["facts.db"]["path"], ui=dict(
+            region_views.page_regions(facts_db=facts_db, ui=dict(
                 kpi=kpi, sec=sec, layout=BASE_LAYOUT,
                 comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
                 blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
             ))
+
+    with tabs[5]:
+        if tabs[5].open:
+            # The original per-region pages, read from the Southport workbook and the Brazil database.
+            with st.spinner("Loading vessel data..."):
+                frames = load_data(file_source, mtime=file_mtime)
+                trends_regions, latest_date = load_trends_snapshot(file_source, mtime=file_mtime)
+            n_months = st.slider("Shipped history window (months)", min_value=3, max_value=24, value=12, step=1,
+                                 help="Number of months of sailed history to display", key="legacy_months")
+            legacy = st.tabs(["Summary", "USG", "PNW", "TXG", "Brazil"], on_change="rerun")
+            with legacy[0]:
+                if legacy[0].open:
+                    page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
+            for i, (code, name) in enumerate((("USG", "US Gulf (USG)"), ("PNW", "Pacific Northwest (PNW)"), ("TXG", "Texas Gulf (TXG)")), 1):
+                with legacy[i]:
+                    if legacy[i].open:
+                        st.markdown(f"<h2>{name}</h2>", unsafe_allow_html=True)
+                        page_us(frames[code], code, n_months)
+            with legacy[4]:
+                if legacy[4].open:
+                    st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
+                    page_brazil(frames_us=frames)
 
     # ── Disclaimer footer ─────────────────────────────────────────────────────
     current_year = datetime.now().year

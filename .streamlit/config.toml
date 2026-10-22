@@ -1,0 +1,7 @@
+# Light theme for the whole app (native widgets, tables and metrics included), in JSA colours.
+[theme]
+base = "light"
+primaryColor = "#5e7164"
+backgroundColor = "#f6f8f7"
+secondaryBackgroundColor = "#eef3f0"
+textColor = "#32373c"

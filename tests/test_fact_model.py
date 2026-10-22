@@ -242,7 +242,8 @@ def test_every_region_in_spec_exists_and_every_mapped_port_has_a_valid_region():
     cfg = dim.default_config()
     assert set(cfg.regions["region"]) == {
         "PNW", "US Gulf", "Texas Gulf", "Great Lakes", "Atlantic", "Interior / river elevators",
-        "Brazil North Arc", "Brazil South/Southeast"}
+        "Brazil North Arc", "Brazil South/Southeast",
+        "Argentina Up-River", "Argentina South", "Uruguay"}
     assert set(cfg.port_region["region"]) <= set(cfg.regions["region"])
 
 

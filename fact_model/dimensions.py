@@ -127,7 +127,7 @@ def add_geography(df, source, cfg=None):
         df["region"] = [o[2] for o in out]
         df["mapped"] = [o[3] for o in out]
         df["unmapped_reason"] = [o[4] for o in out]
-    elif source == "Brazil":
+    elif source in ("Brazil", "Argentina"):
         res = {p: resolve_port(p, cfg) for p in df["port_raw"].drop_duplicates()}
         df["port"] = [res[p][0] for p in df["port_raw"]]
         df["region"] = [res[p][1] for p in df["port_raw"]]
@@ -156,10 +156,41 @@ def unmapped_report(df, value_col="kmt"):
 # USDA gives them different marketing years (Sep 1 vs Oct 1) and FGIS counts beans only.
 # Canola is Other (no USDA year on the FAS table).
 
+_AR_NON_AG = ("WOOD", "PULP", "CRUDE OIL", "FUEL OIL", "STEEL", "IRON", "FERTILIZER", "UREA", "UAN", "DAP", "MAP", "TSP",
+              "PHOSPHORIC", "PETCOKE", "SULPHURIC", "CAUSTIC", "GENERAL CARGO", "COAL", "LIQUID", "CELLULOSE")
+
+
+def _AR_COMMODITY(c):
+    """Nabsa cargo names (SOYBEANMEAL, SOYA BEAN, SOYBEAN OIL, ...). Meal means soybean meal only; sunflower
+    meal and hull pellets are Other; vegetable oils other than soybean oil are Other Oils; ships' non-agricultural
+    cargoes (wood, pulp, fuel, fertiliser, steel) are Non-Ag so they can be hidden."""
+    if c == "CORN":
+        return "Corn"
+    if c in ("SOYBEANMEAL", "SOYBEAN MEAL", "SOYA MEAL"):
+        return "Soybean Meal"
+    if c in ("SOYA BEAN", "SOYBEAN", "SOYBEANS"):
+        return "Soybeans"
+    if c in ("SOYBEAN OIL", "NEUTRALIZED SOYBEAN OIL", "NEUTRAL OIL", "SOYBEANOIL REFINED", "SOYA BEAN OIL (BLEND)"):
+        return "Soybean Oil"
+    if c.startswith("WHEAT"):
+        return "Wheat"
+    if c == "SORGHUM":
+        return "Sorghum"
+    if c == "RICE":
+        return "Rice"
+    if any(t in c for t in ("OIL", "BIODIESEL", "OLEIN", "TALLOW", "LECITHIN")) and not any(t in c for t in _AR_NON_AG[:3]):
+        return "Other Oils"
+    if any(t in c for t in _AR_NON_AG):
+        return "Non-Ag"
+    return "Other"
+
+
 def commodity_group(source, raw):
     if raw is None or (isinstance(raw, float) and raw != raw):
         return "Other"
     c = str(raw).strip().upper()
+    if source == "Argentina":
+        return _AR_COMMODITY(c)
     if source == "Brazil":
         if any(t in c for t in ("SBMP", "HIPRO", "SPC")):
             return "Soybean Meal"
