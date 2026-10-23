@@ -12,6 +12,8 @@ Every view answers the same two questions the same way:
 Called from app.py: page_summary(facts_db) and page_country(country, facts_db).
 """
 
+import base64
+import functools
 import os
 
 import numpy as np
@@ -19,6 +21,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import copy_tools
 from fact_model import changes as ch
 from fact_model import dimensions as dim
 from fact_model import store
@@ -39,14 +42,40 @@ GROUPS = {"Commodity": "commodity", "Country": "country", "Area": "area", "Port"
 PREV_COLS = ch.PREV
 
 
-def _layout(fig, height=340, title=None):
-    fig.update_layout(height=height, margin=dict(l=8, r=8, t=36 if title else 10, b=8), paper_bgcolor=SURFACE,
-                      plot_bgcolor=SURFACE, font=dict(color=MUTED, family="Arial", size=12),
-                      title=dict(text=title, x=0, font=dict(size=13, color=INK)) if title else None,
-                      legend=dict(orientation="h", y=-0.18, font=dict(color=INK)))
-    fig.update_xaxes(gridcolor="#eef3f0", linecolor=BORDER)
-    fig.update_yaxes(gridcolor="#eef3f0", linecolor=BORDER)
+@functools.lru_cache(maxsize=1)
+def _watermark():
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-50yr.png")
+        return "data:image/png;base64," + base64.b64encode(open(path, "rb").read()).decode()
+    except OSError:
+        return None
+
+
+def _layout(fig, height=340, title=None, unified=True):
+    """Same look as the CFTC COT dashboard: white panel, light grid, small legend top-left, faint JSA watermark."""
+    fig.update_layout(height=height, margin=dict(l=10, r=10, t=44 if title else 10, b=10), paper_bgcolor=SURFACE,
+                      plot_bgcolor=SURFACE, font=dict(color=MUTED, family="Source Sans 3, Arial, sans-serif", size=12),
+                      title=dict(text=title, x=0, y=0.97, font=dict(size=13, color=INK)) if title else None,
+                      hovermode="x unified" if unified else "closest",
+                      legend=dict(orientation="h", y=1.12 if not title else 1.0, x=0.45 if title else 0, font=dict(size=11, color=MUTED)))
+    fig.update_xaxes(gridcolor=BORDER, linecolor=BORDER, tickfont=dict(color=MUTED, size=11), zeroline=False)
+    fig.update_yaxes(gridcolor=BORDER, linecolor=BORDER, tickfont=dict(color=MUTED, size=11), zeroline=False)
+    wm = _watermark()
+    if wm:
+        fig.add_layout_image(dict(source=wm, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+                                  xanchor="center", yanchor="middle", sizing="contain", opacity=0.10, layer="below"))
     return fig
+
+
+def tile(label, value, delta="", sub=""):
+    """A CFTC-style tile: small caps label, big figure, neutral movement line, grey sub-line."""
+    d = f'<div class="tile-delta-neu">{delta}</div>' if delta else ""
+    u = f'<div class="tile-sub">{sub}</div>' if sub else ""
+    return f'<div class="tile"><div class="tile-label">{label}</div><div class="tile-value">{value}</div>{d}{u}</div>'
+
+
+def _arrow(v):
+    return "–" if v is None or pd.isna(v) else ("▲ " if v > 0.05 else "▼ " if v < -0.05 else "") + _delta(v).lstrip("+−")
 
 
 # ── data ─────────────────────────────────────────────────────────────────────
@@ -192,13 +221,13 @@ def change_table(detail, by, label):
     return out
 
 
-def show_change_table(detail, by, label):
+def show_change_table(detail, by, label, key):
     if detail.empty:
         st.info("Nothing in the line-up for this selection.")
         return
     t = change_table(detail, by, label)
     d_cols = [c for c in t.columns if c.startswith(("Δ", "%"))]
-    st.dataframe(_styled(t, d_cols, label), hide_index=True, height=min(38 * (len(t) + 1), 560))
+    copy_tools.table(t, key, styler=_styled(t, d_cols, label), height=min(38 * (len(t) + 1), 560))
 
 
 def port_table(detail):
@@ -222,12 +251,12 @@ def port_table(detail):
     return disp.rename(columns={"region": "Area", "port": "Port"})
 
 
-def show_port_table(detail):
+def show_port_table(detail, key):
     if detail.empty:
         st.info("Nothing in the line-up for this selection.")
         return
     t = port_table(detail)
-    st.dataframe(_styled(t, ["Δ Week", "Δ Month", "Δ Year"]), hide_index=True, height=min(38 * (len(t) + 1), 640))
+    copy_tools.table(t, key, styler=_styled(t, ["Δ Week", "Δ Month", "Δ Year"]), height=min(38 * (len(t) + 1), 640))
 
 
 # ── charts ───────────────────────────────────────────────────────────────────
@@ -244,7 +273,7 @@ def _trend(lineup, gaps, measure, key):
         return
     fig = px.area(g, x="report_date", y=measure, color="commodity", color_discrete_map=COMM_COLORS,
                   category_orders={"commodity": _comm_sort(g["commodity"].unique())}, labels={measure: _unit(measure), "report_date": ""})
-    st.plotly_chart(_layout(fig, 320, f"Line-up over time ({_unit(measure)})"), key=f"{key}_trend")
+    copy_tools.chart(_layout(fig, 320, f"Line-up over time ({_unit(measure)})"), f"{key}_trend")
     if g["report_date"].nunique() < 3:
         st.caption("Only a few snapshots are banked for this selection so far; the trend fills in as new line-ups arrive.")
 
@@ -261,7 +290,7 @@ def _destinations(df, col, measure, title, key, top=15):
                  category_orders={"destination": list(tot.index), "commodity": _comm_sort(g["commodity"].unique())},
                  labels={col: _unit(measure), "destination": ""})
     fig.update_yaxes(autorange="reversed")
-    st.plotly_chart(_layout(fig, 60 + 26 * len(tot), title), key=key)
+    copy_tools.chart(_layout(fig, 60 + 26 * len(tot), title, unified=False), key)
     if unk > 0.05:
         st.caption(f"{unk:.0%} of the {_unit(measure)} has no destination reported and is left out of this chart.")
 
@@ -275,22 +304,22 @@ def lineup_view(sel, lineup, detail, meta, gaps, left_out, measure, key, group_b
         return
     tot = ch.rollup(d.assign(_t="t"), ["_t"]).iloc[0]
     k = st.columns(4)
-    k[0].metric(f"Line-up now ({_unit(measure)})", _num(tot["now"]))
-    k[1].metric("vs last week", _delta(tot["d_wk"]), _pct(tot["p_wk"]), delta_color="off")
-    k[2].metric("vs last month", _delta(tot["d_mo"]), _pct(tot["p_mo"]), delta_color="off")
-    k[3].metric("vs last year", _delta(tot["d_yr"]), _pct(tot["p_yr"]), delta_color="off")
+    k[0].markdown(tile(f"Line-up now ({_unit(measure)})", _num(tot["now"])), unsafe_allow_html=True)
+    for col, (lbl, chg, pc) in zip(k[1:], (("vs last week", tot["d_wk"], tot["p_wk"]), ("vs last month", tot["d_mo"], tot["p_mo"]),
+                                            ("vs last year", tot["d_yr"], tot["p_yr"]))):
+        col.markdown(tile(lbl, _delta(chg), _arrow(chg), _pct(pc)), unsafe_allow_html=True)
     srcs = sorted(d["source"].unique())
     _asof_caption(meta, srcs, left_out)
     new = [s for s in srcs if meta.loc[meta["source"] == s, "wk_date"].isna().all()]
     if new:
         st.caption(f"{', '.join(SRC_LABEL[s] for s in new)}: daily line-up began Oct 22, 2026, so its week / month / year "
                    "comparisons fill in as it accumulates (it is in the totals, not in the changes).")
-    show_change_table(d, GROUPS[group_by], group_by)
+    show_change_table(d, GROUPS[group_by], group_by, f"{key}_ct")
     ln = _apply(lineup, sel)
     _trend(ln, gaps, measure, key)
     if port_matrix:
         st.markdown("**By port**")
-        show_port_table(d)
+        show_port_table(d, f"{key}_ports")
     st.markdown("**Where the line-up is headed**")
     cur = ch.current_rows(ln, meta)
     _destinations(cur, measure, measure, f"Line-up destinations ({_unit(measure)})", f"{key}_ldest")
@@ -333,7 +362,7 @@ def _timeline(ev, key):
                      category_orders={"port": order[::-1], "commodity": _comm_sort(r["commodity"].unique())}, size_max=18,
                      hover_data={"vessel": True, "destination": True, "kmt": ":,.1f", "size": False, "sail_date": "|%b %d, %Y"},
                      labels={"sail_date": "", "port": "", "kmt": "kMT"})
-    st.plotly_chart(_layout(fig, 140 + 24 * len(order), f"Sailings, last {win or '30 days'} (bubble = kMT)"), key=f"{key}_timeline")
+    copy_tools.chart(_layout(fig, 140 + 24 * len(order), f"Sailings, last {win or '30 days'} (bubble = kMT)", unified=False), f"{key}_timeline")
     return r, days
 
 
@@ -349,8 +378,8 @@ def sailed_view(sel, events, measure, months, key, group_by="Commodity"):
                "same days of last month and of last year.")
     by = GROUPS[group_by]
     t = _sailed_table(ch.sailed_windows(ev, [by], measure), group_by, by)
-    st.dataframe(_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], group_by), hide_index=True,
-                 height=min(38 * (len(t) + 1), 560))
+    copy_tools.table(t, f"{key}_sailed", styler=_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], group_by),
+                     height=min(38 * (len(t) + 1), 560))
     if "Argentina" in srcs:
         st.caption("Argentina's sailed history starts Oct 1, 2026 (the first Nabsa report), so its last-month and last-year "
                    "comparisons are n/a for now.")
@@ -365,13 +394,14 @@ def sailed_view(sel, events, measure, months, key, group_by="Commodity"):
                      category_orders={"commodity": _comm_sort(mm["commodity"].unique())}, labels={"_m": _unit(measure), "month": ""})
         fig.update_xaxes(tickformat="%b %Y")
         fig.update_traces(marker_line_width=0)
-        st.plotly_chart(_layout(fig, 340, f"Shipped {_unit(measure)} by month and commodity"), key=f"{key}_monthly")
+        copy_tools.chart(_layout(fig, 340, f"Shipped {_unit(measure)} by month and commodity"), f"{key}_monthly")
         piv = mm.pivot_table(index="commodity", columns="month", values="_m", aggfunc="sum", fill_value=0.0)
         piv = piv.loc[_comm_sort(piv.index)]
         piv.columns = [c.strftime("%b %Y") for c in piv.columns]
         piv["Total"] = piv.sum(axis=1)
         piv.loc["Total"] = piv.sum()
-        st.dataframe(piv.map(lambda v: "" if v == 0 else _num(v)), height=min(38 * (len(piv) + 1), 360))
+        copy_tools.table(piv.map(lambda v: "" if v == 0 else _num(v)), f"{key}_pivot", height=min(38 * (len(piv) + 1), 360),
+                         hide_index=False)
     st.markdown("**Sailing timeline**")
     recent, days = _timeline(ev, key)
     st.markdown("**Where recent sailings went**")
@@ -415,7 +445,8 @@ def _snapshot_matrices(detail, events, measure):
     for title, cols in ((f"Line-up now ({unit})", now), (f"Sailed month-to-date ({unit})", mtd)):
         st.markdown(f"**{title}**")
         t = render(cols)
-        st.dataframe(_styled(t, [], "Commodity"), hide_index=True, height=38 * (len(t) + 1))
+        copy_tools.table(t, "snap_now" if title.startswith("Line-up") else "snap_mtd", styler=_styled(t, [], "Commodity"),
+                         height=38 * (len(t) + 1))
 
 
 def _area_table(detail, source):
@@ -423,7 +454,7 @@ def _area_table(detail, source):
     d = detail[detail["source"] == source]
     if d["area"].nunique() < 2:
         return
-    show_change_table(d, "area", "Area")
+    show_change_table(d, "area", "Area", f"sum_area_{source}")
 
 
 def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
@@ -473,14 +504,13 @@ def page_summary(facts_db):
     cols = st.columns(len(SCOPES))
     for col, (name, sel) in zip(cols, SCOPES):
         d = _apply(detail, sel)
+        label = "US" if name == "United States" else name
         if d.empty:
-            col.metric(name, "—")
+            col.markdown(tile(label, "—"), unsafe_allow_html=True)
             continue
         r = ch.rollup(d.assign(_t="t"), ["_t"]).iloc[0]
-        col.metric("US" if name == "United States" else name, _num(r["now"]),
-                   None if pd.isna(r["d_wk"]) else f"{_delta(r['d_wk'])} wk", delta_color="off",
-                   help=f"Change vs last week {_delta(r['d_wk'])} · month {_delta(r['d_mo'])} · year {_delta(r['d_yr'])}")
-        col.caption(f"Mo {_delta(r['d_mo'])} · Yr {_delta(r['d_yr'])}")
+        col.markdown(tile(label, _num(r["now"]), f"{_arrow(r['d_wk'])} wk", f"Mo {_delta(r['d_mo'])} · Yr {_delta(r['d_yr'])}"),
+                     unsafe_allow_html=True)
     _asof_caption(meta, None, left_out)
 
     st.markdown("##### Snapshot by commodity")
@@ -494,7 +524,7 @@ def page_summary(facts_db):
             continue
         with st.expander(name, expanded=name == "Total"):
             st.markdown("**Line-up**")
-            show_change_table(d, "commodity", "Commodity")
+            show_change_table(d, "commodity", "Commodity", f"sum_ct_{name}")
             if name in ("United States", "Brazil", "Argentina"):
                 st.markdown("**Line-up by area**")
                 _area_table(detail, sel["source"][0])
@@ -502,8 +532,8 @@ def page_summary(facts_db):
             if not ev.empty:
                 st.markdown("**Sailed**")
                 t = _sailed_table(ch.sailed_windows(ev, ["commodity"], measure), "Commodity", "commodity")
-                st.dataframe(_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], "Commodity"), hide_index=True,
-                             height=min(38 * (len(t) + 1), 400))
+                copy_tools.table(t, f"sum_sailed_{name}", styler=_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], "Commodity"),
+                                 height=min(38 * (len(t) + 1), 400))
 
     st.markdown("---")
     _explorer(lineup, events, detail, meta, gaps, left_out, measure)
