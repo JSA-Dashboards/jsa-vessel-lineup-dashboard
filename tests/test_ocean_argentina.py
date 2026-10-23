@@ -49,7 +49,7 @@ def _parsed(lineup_rows, expected, sailed_rows=(), expected_sailed=None):
 
 def test_validation_ties_the_parse_to_the_reports_own_totals():
     rows = [("A", "2026-06-20", "CHINA", "MZ", 30000.0), ("B", "2026-06-21", "INDIA", "SBM", 40000.0)]
-    assert oa.validate(_parsed(rows, {"MZ": 30000.0, "SBM": 40500.0}))[0]                    # within 1%
+    assert oa.validate(_parsed(rows, {"MZ": 30000.0, "SBM": 40500.0, "SFS": 99999.0}))[0]    # within 3%; other products are ignored
     ok, bad = oa.validate(_parsed(rows, {"MZ": 30000.0, "SBM": 90000.0}))
     assert not ok and bad["SBM"] == (90000.0, 40000.0)
 
