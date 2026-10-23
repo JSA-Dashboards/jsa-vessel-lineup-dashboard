@@ -280,10 +280,124 @@ def evaluate(obs, weights):
     return {k: (float(np.mean(v)) if v else np.nan, len(v)) for k, v in res.items()}
 
 
-def refresh(facts_db=None, start_year=2023, learn_months=24, ships=None):
-    """Rebuild the combo calibration from the sail events in facts.db and FGIS ship inspections, and save three tables there:
-    combo_shares (learned average split per combo type), combo_weights (fitted per-commodity weights), combo_actual (the measured
-    split of each matched vessel). -> a summary dict (also stored as combo_meta)."""
+# ── ongoing vetting: does the split we use keep beating the placeholder assumptions? ─────────────────────────────────────
+
+STRATEGIES = ["excluded", "equal", "rule", "learned", "learned+actual"]
+STRATEGY_LABEL = {"excluded": "Combos left out", "equal": "Even split", "rule": "Corn/wheat double (old rule)",
+                  "learned": "Learned averages (walk-forward)", "learned+actual": "Learned + each boat's measured split"}
+
+
+def fgis_monthly(ships):
+    """FGIS ship inspections by month x FGIS port region x commodity. -> DataFrame[month, fgis_port, commodity, fgis_kmt]"""
+    s = ships[ships["commodity"].notna()].copy()
+    s["month"] = pd.to_datetime(s["date"]).dt.to_period("M").dt.to_timestamp()
+    return s.groupby(["month", "port", "commodity"], as_index=False)["kmt"].sum().rename(columns={"port": "fgis_port", "kmt": "fgis_kmt"})
+
+
+def backtest_monthly(events, ships, obs, weights, months=12, learn_months=24, min_n=MIN_N):
+    """Walk-forward check of the totals. For each of the last `months` completed months and each FGIS port region, build the
+    month's grain tonnage (corn, soybeans, wheat, sorghum) from single-commodity sailings plus the combo boats split five ways
+    (see STRATEGIES), and compare with what FGIS inspected. The 'learned' strategies only use boats that sailed BEFORE the month,
+    so each month is a genuine out-of-sample test. (Fitted weights are fitted once on all data and only matter for rare types.)
+    Inspections lead loading, so no strategy matches FGIS exactly; what counts is whether the combo split closes the gap.
+    -> long DataFrame[month, fgis_port, commodity, strategy, pred_kmt, fgis_kmt]"""
+    e = events[(events["source"] == "US") & events["kmt"].notna() & (events["fgis_port"].fillna("") != "")].copy()
+    e["month"] = pd.to_datetime(e["sail_date"]).dt.to_period("M").dt.to_timestamp()
+    f = fgis_monthly(ships)
+    this_month = pd.Timestamp.now().normalize().replace(day=1)
+    test_months = sorted(m for m in e["month"].unique() if m < this_month)[-months:]
+    grains = list(GRAIN.values())
+    act = complete_shares(obs, weights)
+    act_by = {k: dict(zip(g["commodity"], g["share"])) for k, g in act.groupby("event_id")}
+    rows = []
+    for m in test_months:
+        table = learn_shares(obs[obs["sail_date"] < m], weights, since=m - pd.DateOffset(months=learn_months), min_n=min_n)
+        em = e[e["month"] == m]
+        for port, g in em.groupby("fgis_port"):
+            pred = {s: {c: 0.0 for c in grains} for s in STRATEGIES}
+            for r in g.itertuples():
+                key = combo_key(r.combo) if r.commodity == cb.COMBO_GROUP else ()
+                if r.commodity in grains:
+                    for s in STRATEGIES:
+                        pred[s][r.commodity] += r.kmt
+                elif len(key) >= 2:
+                    rule = cb.combo_shares(r.combo)
+                    learned, _ = shares_for(r.combo, r.region, table, weights)
+                    mixed = dict(act_by[r.event_id]) if r.event_id in act_by else learned
+                    for c in grains:
+                        pred["equal"][c] += r.kmt / len(key) if c in key else 0.0
+                        pred["rule"][c] += r.kmt * rule.get(c, 0.0)
+                        pred["learned"][c] += r.kmt * learned.get(c, 0.0)
+                        pred["learned+actual"][c] += r.kmt * mixed.get(c, 0.0)
+            truth = f[(f["month"] == m) & (f["fgis_port"] == port)].set_index("commodity")["fgis_kmt"]
+            for s in STRATEGIES:
+                for c in grains:
+                    rows.append({"month": m, "fgis_port": port, "commodity": c, "strategy": s, "pred_kmt": pred[s][c],
+                                 "fgis_kmt": float(truth.get(c, 0.0))})
+    return pd.DataFrame(rows, columns=["month", "fgis_port", "commodity", "strategy", "pred_kmt", "fgis_kmt"])
+
+
+def backtest_summary(bt, port=None):
+    """Weighted absolute % error of the monthly grain tonnage per strategy (sum |predicted - FGIS| / sum FGIS), plus the net bias
+    (predicted / FGIS - 1). `port` limits it to one FGIS region (e.g. 'MISSISSIPPI R.' for the US Gulf)."""
+    b = bt if port is None else bt[bt["fgis_port"] == port]
+    out = []
+    for s, g in b.groupby("strategy"):
+        tot = g["fgis_kmt"].sum()
+        out.append({"strategy": s, "wape": float((g["pred_kmt"] - g["fgis_kmt"]).abs().sum() / tot) if tot else np.nan,
+                    "bias": float(g["pred_kmt"].sum() / tot - 1) if tot else np.nan})
+    return pd.DataFrame(out).set_index("strategy").reindex(STRATEGIES) if out else pd.DataFrame(columns=["wape", "bias"])
+
+
+def drift(previous, table, min_n=30, threshold=0.10):
+    """Combo types whose learned share moved more than `threshold` since the last stored refresh.
+    previous: DataFrame[date, scope, key, commodity, share, n] (combo_shares_history) -> list of (key, commodity, before, now)."""
+    if previous is None or previous.empty or table.empty:
+        return []
+    last = previous[previous["date"] == previous["date"].max()]
+    before = {(r.key, r.commodity): r.share for r in last.itertuples() if r.scope == "US"}
+    out = []
+    for r in table[(table["scope"] == "US") & (table["n"] >= min_n)].itertuples():
+        b = before.get((r.key, r.commodity))
+        if b is not None and abs(r.share - b) > threshold:
+            out.append((r.key, r.commodity, float(b), float(r.share)))
+    return out
+
+
+def health(meta, summary, moved=()):
+    """Status of the combo math: ('ok' | 'warn' | 'fail', [reasons]). 'fail' = something broke, or the learned split is no
+    better than the placeholder (act on it); 'warn' = worth a look (a learned share jumped, or a benchmark did better)."""
+    rank = {"ok": 0, "warn": 1, "fail": 2}
+    status, reasons = "ok", []
+
+    def flag(level, why):
+        nonlocal status
+        reasons.append(why)
+        if rank[level] > rank[status]:
+            status = level
+
+    if meta.get("combo_events", 0) and meta["matched"] / meta["combo_events"] < 0.5:
+        flag("fail", f"only {meta['matched'] / meta['combo_events']:.0%} of combo sailings matched to USDA by vessel name (normally ~80%)")
+    if meta.get("usable", 0) < 200:
+        flag("fail", f"only {meta.get('usable', 0)} vessels usable for learning (normally 800+)")
+    if not pd.isna(meta.get("mae_learned", np.nan)) and meta["mae_learned"] > meta["mae_equal"] - 0.02:
+        flag("fail", "the learned split is no longer clearly better than an even split per boat")
+    if len(summary) and "learned" in summary.index and not pd.isna(summary.loc["learned", "wape"]):
+        if summary.loc["learned", "wape"] > summary.loc["excluded", "wape"]:
+            flag("fail", "adding the split combo tonnage makes the monthly totals fit USDA worse than leaving combos out")
+        elif summary.loc["learned", "wape"] > summary.loc["equal", "wape"]:
+            flag("warn", "the learned split fits monthly USDA totals worse than an even split this period")
+    for key, com, b, n in moved:
+        flag("warn", f"{key}: {com} share moved from {b:.0%} to {n:.0%} since the last refresh")
+    return status, reasons
+
+
+def refresh(facts_db=None, start_year=2023, learn_months=24, ships=None, backtest_months=12):
+    """Rebuild the combo calibration from the sail events in facts.db and FGIS ship inspections, vet it, and save to facts.db:
+    combo_shares (learned average split per combo type), combo_weights (fitted per-commodity weights), combo_actual (measured
+    split of each matched vessel), combo_backtest (monthly walk-forward check against USDA totals), combo_history (one row per
+    refresh: accuracy of every strategy + health status) and combo_shares_history (the learned shares per refresh, so drift is
+    visible). -> a summary dict (also stored as combo_meta) whose 'status' is ok / warn / fail."""
     from . import store
     events = store.load_events(facts_db)
     events = events[events["source"] == "US"]
@@ -294,14 +408,29 @@ def refresh(facts_db=None, start_year=2023, learn_months=24, ships=None):
     since = (pd.Timestamp.now().normalize() - pd.DateOffset(months=learn_months)) if learn_months else None
     table = learn_shares(obs, weights, since=since)
     actual = complete_shares(obs, weights)
+    ev = evaluate(obs, weights)
+    bt = backtest_monthly(events, ships, obs, weights, months=backtest_months)
+    summ_all, summ_usg = backtest_summary(bt), backtest_summary(bt, "MISSISSIPPI R.")
+    prev = store.load_table("combo_shares_history", facts_db)
+    status, reasons = health({"combo_events": int(len(matched)), "matched": int(matched["matched"].sum()), "usable": int(obs["event_id"].nunique()),
+                              "mae_learned": ev["learned"][0], "mae_equal": ev["equal"][0]}, summ_all, drift(prev, table))
+    today = str(pd.Timestamp.now().date())
+    meta = {"refreshed": today, "combo_events": int(len(matched)), "matched": int(matched["matched"].sum()),
+            "usable": int(obs["event_id"].nunique()), "types_learned": int(table[table["scope"] == "US"]["key"].nunique()),
+            "mae_learned": ev["learned"][0], "mae_weights": ev["weights"][0], "mae_rule": ev["rule"][0], "mae_equal": ev["equal"][0],
+            "status": status, "reasons": " | ".join(reasons),
+            **{f"wape_{s}": summ_all.loc[s, "wape"] for s in STRATEGIES}, **{f"wape_usg_{s}": summ_usg.loc[s, "wape"] for s in STRATEGIES}}
     store.save_table(table, "combo_shares", facts_db)
     store.save_table(pd.DataFrame({"commodity": list(weights), "weight": list(weights.values())}), "combo_weights", facts_db)
     store.save_table(actual[["event_id", "commodity", "share"]], "combo_actual", facts_db)
-    ev = evaluate(obs, weights)
-    meta = {"refreshed": str(pd.Timestamp.now().date()), "combo_events": int(len(matched)), "matched": int(matched["matched"].sum()),
-            "usable": int(obs["event_id"].nunique()), "types_learned": int(table[table["scope"] == "US"]["key"].nunique()),
-            "mae_learned": ev["learned"][0], "mae_weights": ev["weights"][0], "mae_rule": ev["rule"][0], "mae_equal": ev["equal"][0]}
+    store.save_table(bt, "combo_backtest", facts_db)
     store.save_table(pd.DataFrame([meta]), "combo_meta", facts_db)
+    hist = store.load_table("combo_history", facts_db)
+    hist = pd.concat([hist[hist["refreshed"].astype(str) != today] if len(hist) else hist, pd.DataFrame([meta])], ignore_index=True)
+    store.save_table(hist, "combo_history", facts_db)
+    snap = table[table["scope"] == "US"].assign(date=today)[["date", "scope", "key", "commodity", "share", "n"]]
+    sh = pd.concat([prev[prev["date"].astype(str) != today] if len(prev) else prev, snap], ignore_index=True)
+    store.save_table(sh, "combo_shares_history", facts_db)
     return meta
 
 
@@ -312,8 +441,14 @@ def load_calibration(facts_db=None):
     if table.empty:
         table = pd.DataFrame(columns=["scope", "key", "commodity", "share", "p10", "p90", "n"])
     w = store.load_table("combo_weights", facts_db)
-    weights = dict(zip(w["commodity"], w["weight"])) if len(w) else {"Corn": 1.0, "Wheat": 0.63, "Soybeans": 0.46, "Soybean Meal": 0.5,
-                                                                      "Dist. Grains": 0.27}
+    weights = dict(zip(w["commodity"], w["weight"])) if len(w) else dict(PRIOR_WEIGHTS)
     actual = store.load_table("combo_actual", facts_db)
     m = store.load_table("combo_meta", facts_db)
     return table, weights, actual, (m.iloc[0].to_dict() if len(m) else {})
+
+
+def load_vetting(facts_db=None):
+    """-> (backtest DataFrame, history DataFrame, shares-history DataFrame) for the dashboard's vetting panel."""
+    from . import store
+    return (store.load_table("combo_backtest", facts_db, ["month"]), store.load_table("combo_history", facts_db),
+            store.load_table("combo_shares_history", facts_db, ["date"]))

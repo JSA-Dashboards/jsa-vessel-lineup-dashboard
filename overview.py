@@ -109,6 +109,11 @@ def _calibration(facts_db, mtime=None):
     return cc.load_calibration(facts_db)
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _vetting(facts_db, mtime=None):
+    return cc.load_vetting(facts_db)
+
+
 @st.cache_data(show_spinner=False, max_entries=6)
 def _prepare(facts_db, mtime, measure, split=True):
     """Line-up, events and the week/month/year detail for the six commodities. The change baselines are worked out
@@ -232,6 +237,51 @@ def combo_method_note(facts_db, mtime):
             show = t.pivot_table(index=["key", "n"], columns="commodity", values="share", aggfunc="first").reset_index()
             show = show.rename(columns={"key": "Combo type", "n": "Boats"}).sort_values("Boats", ascending=False).fillna("")
             copy_tools.table(show, "combo_types", height=min(38 * (len(show) + 1), 520))
+        _vetting_panel(facts_db, mtime, meta)
+
+
+def _vetting_panel(facts_db, mtime, meta):
+    """The ongoing check: refreshed with every calibration run, tested out-of-sample against USDA's monthly totals."""
+    bt, hist, _ = _vetting(facts_db, mtime)
+    if bt.empty:
+        return
+    st.markdown("##### Ongoing check against USDA")
+    status, reasons = meta.get("status", "ok"), [r for r in str(meta.get("reasons", "")).split(" | ") if r]
+    if status == "ok":
+        st.success(f"Healthy as of {meta.get('refreshed', '')}: the learned split beats the even split per boat and fits USDA's monthly "
+                   "totals better than leaving combos out.", icon=":material/check_circle:")
+    else:
+        (st.error if status == "fail" else st.warning)("Needs a look: " + "; ".join(reasons), icon=":material/warning:")
+    summ = cc.backtest_summary(bt)
+    c = st.columns(len(cc.STRATEGIES))
+    for col, s_ in zip(c, cc.STRATEGIES):
+        w, b = summ.loc[s_, "wape"], summ.loc[s_, "bias"]
+        col.markdown(tile(cc.STRATEGY_LABEL[s_], "n/a" if pd.isna(w) else f"{w:.0%}", "avg monthly error", f"net {b:+.0%} vs USDA"),
+                     unsafe_allow_html=True)
+    st.caption("Each of the last 12 months is rebuilt using only boats that sailed BEFORE it, then compared with what USDA inspected "
+               "(corn, soybeans, wheat, sorghum; meal is not inspected). USDA inspects before loading, so no method matches exactly; "
+               "what counts is whether splitting the combos closes the gap. The remaining shortfall (negative net) is sailings our "
+               "line-up reports do not capture, not combo splitting.")
+    ports = sorted(bt["fgis_port"].unique(), key=lambda p: -bt[bt["fgis_port"] == p]["fgis_kmt"].sum())
+    k1, k2 = st.columns(2)
+    port = k1.selectbox("USDA port region", ports, key="vet_port")
+    com = k2.selectbox("Commodity", cc.GRAIN.values(), key="vet_com")
+    d = bt[(bt["fgis_port"] == port) & (bt["commodity"] == com)]
+    lines = d[d["strategy"].isin(["excluded", "equal", "learned"])].assign(series=lambda x: x["strategy"].map(cc.STRATEGY_LABEL))
+    base = d[d["strategy"] == "learned"].assign(series="USDA inspected", pred_kmt=lambda x: x["fgis_kmt"])
+    fig = px.line(pd.concat([lines, base]), x="month", y="pred_kmt", color="series", markers=True,
+                  color_discrete_map={"USDA inspected": INK, cc.STRATEGY_LABEL["learned"]: "#0693e3",
+                                      cc.STRATEGY_LABEL["equal"]: "#c98b3c", cc.STRATEGY_LABEL["excluded"]: "#9aa5a0"},
+                  labels={"pred_kmt": "kMT", "month": "", "series": ""})
+    copy_tools.chart(_layout(fig, 300, f"{com}, {port.title()}: monthly tonnage by method vs USDA (kMT)"), "vet_chart")
+    if len(hist) > 1:
+        h = hist.tail(12)[["refreshed", "status", "usable", "mae_learned", "mae_equal", "wape_learned", "wape_equal"]].copy()
+        for col in ("mae_learned", "mae_equal", "wape_learned", "wape_equal"):
+            h[col] = h[col].map(lambda v: "n/a" if pd.isna(v) else f"{v:.0%}")
+        h.columns = ["Refreshed", "Status", "Boats used", "Per-boat error (learned)", "Per-boat error (even)",
+                     "Monthly error (learned)", "Monthly error (even)"]
+        st.markdown("**History of the check**")
+        copy_tools.table(h.iloc[::-1], "vet_history", height=min(38 * (len(h) + 1), 400))
 
 
 def _asof_caption(meta, sources=None, left_out=None):

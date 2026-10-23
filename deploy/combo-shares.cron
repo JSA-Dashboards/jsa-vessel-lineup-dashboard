@@ -1,3 +1,4 @@
-# Combo-boat calibration from USDA FGIS vessel inspections - weekdays 18:00 (system time is America/Chicago).
-# Install: sudo cp deploy/combo-shares.cron /etc/cron.d/combo-shares && sudo chmod 755 deploy/run_combo_shares.sh
-0 18 * * 1-5 root /opt/vessel-lineup-dashboard/deploy/run_combo_shares.sh
+# Combo-boat calibration + check against USDA FGIS vessel inspections - weekdays 18:00 (system time is America/Chicago).
+# Wrapped in cron-alert so a failed health check (exit 2) or a crash emails you.
+# Install: sudo cp deploy/combo-shares.cron /etc/cron.d/combo-shares && sudo chmod +x deploy/run_combo_shares.sh
+0 18 * * 1-5 root /opt/alerting/cron-alert "Combo shares check" "/opt/vessel-lineup-dashboard/logs/combo_shares_*.log" /opt/vessel-lineup-dashboard/deploy/run_combo_shares.sh
