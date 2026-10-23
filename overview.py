@@ -23,6 +23,7 @@ import streamlit as st
 
 import copy_tools
 from fact_model import changes as ch
+from fact_model import combo_calibration as cc
 from fact_model import dimensions as dim
 from fact_model import store
 
@@ -104,14 +105,25 @@ def _tidy(df):
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
-def _prepare(facts_db, mtime, measure):
+def _calibration(facts_db, mtime=None):
+    return cc.load_calibration(facts_db)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def _prepare(facts_db, mtime, measure, split=True):
     """Line-up, events and the week/month/year detail for the six commodities. The change baselines are worked out
     on the WHOLE line-up first (so a region whose newest file came through empty is recognised as a data gap) and
-    only then cut down to the six commodities. Returns (lineup, events, detail, meta, gaps, left_out)."""
+    only then cut down to the six commodities. With `split`, combo boats are divided across the commodities they carry
+    (their own USDA-measured split when known, else the learned average for their combo type; see combo_calibration) -
+    tonnage and vessel counts both, totals conserved. Returns (lineup, events, detail, meta, gaps, left_out)."""
     lineup, events = _load(facts_db, mtime)
     events = events.copy()
     events["vessel_w"] = events["vessel_w"].fillna(1.0) if "vessel_w" in events else 1.0
     lineup, events = _tidy(lineup), _tidy(events)
+    if split:
+        table, weights, actual, _ = _calibration(facts_db, mtime)
+        lineup = cc.allocate(lineup, table, weights, None, value_cols=("kmt",), count_cols=("vessels",))
+        events = cc.allocate(events, table, weights, actual, value_cols=("kmt",), count_cols=("vessel_w",), id_col="event_id")
     detail, meta = ch.lineup_detail(lineup, measure)
     detail = _tidy(detail.assign(destination=""))
     gaps = pd.concat([pd.DataFrame({"source": src, "report_date": sorted(ch.gap_dates(g))})
@@ -179,15 +191,58 @@ def _measure_toggle(key):
     return MEASURES[label or "Vessels"]
 
 
+def _split_toggle(key):
+    """Combo boats: split across their commodities using USDA-measured shares (default), or leave them out."""
+    return st.checkbox("Split combo boats", value=True, key=f"{key}_split",
+                       help="A combo boat (e.g. CORN/SBM) is listed with one total. Its tonnage and its vessel count are divided "
+                            "across the commodities it carries using what USDA inspections show boats of that type really "
+                            "loaded - never an even split. Off = combo boats are left out.")
+
+
+def combo_method_note(facts_db, mtime):
+    """Expander explaining how combo boats are split, with the learned shares and how well each approach predicts."""
+    table, weights, actual, meta = _calibration(facts_db, mtime)
+    with st.expander("How combo boats are split"):
+        if not meta:
+            st.info("No combo calibration is stored yet; combo boats use the fallback weights until it runs.")
+            return
+        pct = lambda v: "n/a" if pd.isna(v) else f"{v:.0%}"
+        st.markdown(
+            f"A combo boat is listed once with one total tonnage (e.g. **CORN/SBM 60 kMT**). USDA inspects the grain on each vessel "
+            f"by name, so for boats that have sailed we can see what they really loaded: **{meta.get('usable', 0):,.0f} of "
+            f"{meta.get('combo_events', 0):,.0f}** US combo sailings since 2023 could be matched and checked "
+            f"({meta.get('matched', 0):,.0f} matched by vessel name; the rest did not add up, e.g. two-port loadings).")
+        st.markdown(
+            "- **Sailed boats** use their own measured split when matched, otherwise the average for their combo type.\n"
+            "- **Boats still in the line-up** use the average for their combo type (below), from the last 24 months of matched boats.\n"
+            "- A combo type too rare to average uses a fitted per-commodity weight (corn 1.0, wheat ~0.6, soybeans/meal ~0.5, "
+            "DDGS ~0.3) - **never an even split**.")
+        c = st.columns(4)
+        c[0].markdown(tile("Even split (50/50)", pct(meta.get("mae_equal")), "avg error / boat"), unsafe_allow_html=True)
+        c[1].markdown(tile("Corn / wheat double", pct(meta.get("mae_rule")), "avg error / boat"), unsafe_allow_html=True)
+        c[2].markdown(tile("Fitted weights", pct(meta.get("mae_weights")), "avg error / boat"), unsafe_allow_html=True)
+        c[3].markdown(tile("Average of type", pct(meta.get("mae_learned")), "avg error / boat"), unsafe_allow_html=True)
+        st.caption("Average error in a boat's commodity share, tested on boats whose split USDA shows. Individual boats vary a lot "
+                   "(a CORN/SBM boat's corn share runs from about 45% to 90%), so one boat's split is an estimate; totals over "
+                   "many boats are firmer.")
+        t = table[table["scope"] == "US"].copy()
+        if len(t):
+            t["share"] = t["share"].map(pct)
+            t["range"] = [("" if pd.isna(a) else f"{a:.0%} to {b:.0%}") for a, b in zip(t["p10"], t["p90"])]
+            show = t.pivot_table(index=["key", "n"], columns="commodity", values="share", aggfunc="first").reset_index()
+            show = show.rename(columns={"key": "Combo type", "n": "Boats"}).sort_values("Boats", ascending=False).fillna("")
+            copy_tools.table(show, "combo_types", height=min(38 * (len(show) + 1), 520))
+
+
 def _asof_caption(meta, sources=None, left_out=None):
     m = meta if sources is None else meta[meta["source"].isin(sources)]
     bits = [f"{SRC_LABEL.get(src, src)} {pd.Timestamp(r['as_of']):%b %d}" for src, r in m.groupby("source").agg(as_of=("as_of", "max")).iterrows()]
     notes = [n for n in m["note"].unique() if n]
     extra = ""
     if left_out:
-        shown = {k: v for k, v in left_out.items() if sources is None or COUNTRIES[k] in sources}
+        shown = {k: v for k, v in left_out.items() if (sources is None or COUNTRIES[k] in sources) and v >= 0.5}
         if shown:
-            extra = ("  \nCombo (multi-commodity) boats are left out for now: " +
+            extra = ("  \nCombo (multi-commodity) boats are left out: " +
                      ", ".join(f"{_num(v)} in the {k} line-up" for k, v in shown.items()) + ".")
     st.caption("Line-up as of: " + " · ".join(bits) + ("  \n" + " | ".join(notes) if notes else "") + extra)
 
@@ -496,8 +551,14 @@ def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
 
 def page_summary(facts_db):
     mtime = os.path.getmtime(facts_db)
-    measure = _measure_toggle("sum")
-    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure)
+    t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
+    with t1:
+        measure = _measure_toggle("sum")
+    with t2:
+        split = _split_toggle("sum")
+    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split)
+    if split:
+        combo_method_note(facts_db, mtime)
     unit = _unit(measure)
 
     st.caption(f"Line-up now, in {unit}. Under each figure: change vs last week (wk), month (Mo) and year (Yr).")
@@ -548,7 +609,8 @@ def page_country(country, facts_db):
     c_show, c_area, c_comm = st.columns([1.4, 2.2, 3.4])          # every filter in one row at the top
     with c_show:
         measure = _measure_toggle(key)
-    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure)
+        split = _split_toggle(key)
+    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split)
     d_src = detail[detail["source"] == source]
     if d_src.empty:
         st.info(f"No {country} line-up banked yet.")

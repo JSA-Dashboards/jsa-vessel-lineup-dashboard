@@ -1,0 +1,3 @@
+# Combo-boat calibration from USDA FGIS vessel inspections - weekdays 18:00 (system time is America/Chicago).
+# Install: sudo cp deploy/combo-shares.cron /etc/cron.d/combo-shares && sudo chmod 755 deploy/run_combo_shares.sh
+0 18 * * 1-5 root /opt/vessel-lineup-dashboard/deploy/run_combo_shares.sh

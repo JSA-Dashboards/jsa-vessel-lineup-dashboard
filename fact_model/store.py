@@ -112,3 +112,17 @@ def rebuild_executed(db_path=None, cfg=None):
 def load_executed(db_path=None):
     return _read("executed_fact", db_path,
                  ["report_date", "month", "mtd_baseline_date", "mytd_baseline_date"])
+
+
+# ── small replace-all tables (combo calibration: shares, weights, per-vessel actual splits) ──
+
+def save_table(df, name, db_path=None):
+    """Replace table `name` with `df` (these are rebuilt in full each refresh)."""
+    d = _iso(df)
+    with _conn(db_path) as c:
+        d.to_sql(name, c, if_exists="replace", index=False)
+    return len(d)
+
+
+def load_table(name, db_path=None, date_cols=()):
+    return _read(name, db_path, list(date_cols))
