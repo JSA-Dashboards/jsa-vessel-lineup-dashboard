@@ -48,7 +48,7 @@ def fetch_fgis_ships(start_year, timeout=120):
     rows, off = [], 0
     while True:
         r = requests.get(SOCRATA_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout, params={
-            "$select": "date,carrier_name,grain,port,mt", "$where": f"type_carrier_text='SHIP' and year>={int(start_year)}",
+            "$select": "date,carrier_name,grain,port,mt,destination", "$where": f"type_carrier_text='SHIP' and year>={int(start_year)}",
             "$limit": "50000", "$offset": str(off), "$order": "date"})
         r.raise_for_status()
         j = r.json()
@@ -58,12 +58,12 @@ def fetch_fgis_ships(start_year, timeout=120):
         off += 50000
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame(columns=["date", "vessel_key", "grain", "kmt", "port"])
+        return pd.DataFrame(columns=["date", "vessel_key", "grain", "commodity", "kmt", "port", "destination"])
     df["date"] = pd.to_datetime(df["date"])
     df["kmt"] = df["mt"].astype(float) / 1000.0
     df["vessel_key"] = df["carrier_name"].map(vessel_key)
     df["commodity"] = df["grain"].map(GRAIN)
-    return df[["date", "vessel_key", "grain", "commodity", "kmt", "port"]]
+    return df[["date", "vessel_key", "grain", "commodity", "kmt", "port", "destination"]]
 
 
 def match_events(events, ships, before=35, after=10):
@@ -387,17 +387,25 @@ def health(meta, summary, moved=()):
             flag("fail", "adding the split combo tonnage makes the monthly totals fit USDA worse than leaving combos out")
         elif summary.loc["learned", "wape"] > summary.loc["equal", "wape"]:
             flag("warn", "the learned split fits monthly USDA totals worse than an even split this period")
+    if meta.get("fill_n", 0) >= 100:
+        if meta["fill_commodity_match"] < 0.90:
+            flag("fail", f"the USDA fill names the wrong commodity for {1 - meta['fill_commodity_match']:.0%} of boats whose cargo is known")
+        if abs(meta["fill_total_ratio"] - 1) > 0.15:
+            flag("fail", f"the USDA fill is {meta['fill_total_ratio'] - 1:+.0%} off the tonnage of boats whose cargo is known")
+    if meta.get("undisclosed", 0) >= 100 and meta.get("filled", 0) / meta["undisclosed"] < 0.60:
+        flag("warn", f"only {meta['filled'] / meta['undisclosed']:.0%} of undisclosed sailings could be filled from USDA (normally ~85%)")
     for key, com, b, n in moved:
         flag("warn", f"{key}: {com} share moved from {b:.0%} to {n:.0%} since the last refresh")
     return status, reasons
 
 
 def refresh(facts_db=None, start_year=2023, learn_months=24, ships=None, backtest_months=12):
-    """Rebuild the combo calibration from the sail events in facts.db and FGIS ship inspections, vet it, and save to facts.db:
-    combo_shares (learned average split per combo type), combo_weights (fitted per-commodity weights), combo_actual (measured
-    split of each matched vessel), combo_backtest (monthly walk-forward check against USDA totals), combo_history (one row per
-    refresh: accuracy of every strategy + health status) and combo_shares_history (the learned shares per refresh, so drift is
-    visible). -> a summary dict (also stored as combo_meta) whose 'status' is ok / warn / fail."""
+    """Rebuild the calibration from the sail events in facts.db and FGIS ship inspections, vet it, and save to facts.db:
+    combo_shares / combo_weights / combo_actual (how combo boats split), events_fill (cargo for undisclosed 'RVT' sailings, read
+    from USDA - see fgis_fill), combo_backtest (monthly walk-forward check against USDA totals, with the fill applied),
+    combo_history (one row per refresh: accuracy, fill stats, health) and combo_shares_history (learned shares per refresh, so
+    drift is visible). -> a summary dict (also stored as combo_meta) whose 'status' is ok / warn / fail."""
+    from . import fgis_fill as ff
     from . import store
     events = store.load_events(facts_db)
     events = events[events["source"] == "US"]
@@ -409,20 +417,32 @@ def refresh(facts_db=None, start_year=2023, learn_months=24, ships=None, backtes
     table = learn_shares(obs, weights, since=since)
     actual = complete_shares(obs, weights)
     ev = evaluate(obs, weights)
-    bt = backtest_monthly(events, ships, obs, weights, months=backtest_months)
+    # undisclosed sailings: fill from USDA, test the fill on boats whose cargo is known, then re-check the monthly totals
+    und = events[ff.undisclosed_mask(events)]
+    fill = ff.fill_undisclosed(events, ships)
+    fb = ff.backtest_fill(events, ships, since=pd.Timestamp.now().normalize() - pd.DateOffset(months=12))
+    events_f = ff.apply_fill(events, fill)
+    bt = backtest_monthly(events_f, ships, obs, weights, months=backtest_months)
+    bt0 = backtest_monthly(events, ships, obs, weights, months=backtest_months)
     summ_all, summ_usg = backtest_summary(bt), backtest_summary(bt, "MISSISSIPPI R.")
+    summ0, summ0_usg = backtest_summary(bt0), backtest_summary(bt0, "MISSISSIPPI R.")
     prev = store.load_table("combo_shares_history", facts_db)
-    status, reasons = health({"combo_events": int(len(matched)), "matched": int(matched["matched"].sum()), "usable": int(obs["event_id"].nunique()),
-                              "mae_learned": ev["learned"][0], "mae_equal": ev["equal"][0]}, summ_all, drift(prev, table))
-    today = str(pd.Timestamp.now().date())
-    meta = {"refreshed": today, "combo_events": int(len(matched)), "matched": int(matched["matched"].sum()),
+    meta = {"refreshed": str(pd.Timestamp.now().date()), "combo_events": int(len(matched)), "matched": int(matched["matched"].sum()),
             "usable": int(obs["event_id"].nunique()), "types_learned": int(table[table["scope"] == "US"]["key"].nunique()),
             "mae_learned": ev["learned"][0], "mae_weights": ev["weights"][0], "mae_rule": ev["rule"][0], "mae_equal": ev["equal"][0],
-            "status": status, "reasons": " | ".join(reasons),
+            "undisclosed": int(len(und)), "filled": int(fill["event_id"].nunique()), "filled_kmt": float(fill["kmt"].sum()),
+            "fill_n": fb["n"], "fill_commodity_match": fb["commodity_match"], "fill_tonnage_err": fb["tonnage_median_abs_err"],
+            "fill_total_ratio": fb["tonnage_total_ratio"],
+            "wape_learned_nofill": summ0.loc["learned", "wape"], "wape_usg_learned_nofill": summ0_usg.loc["learned", "wape"],
+            "bias_learned_nofill": summ0.loc["learned", "bias"], "bias_learned": summ_all.loc["learned", "bias"],
             **{f"wape_{s}": summ_all.loc[s, "wape"] for s in STRATEGIES}, **{f"wape_usg_{s}": summ_usg.loc[s, "wape"] for s in STRATEGIES}}
+    status, reasons = health(meta, summ_all, drift(prev, table))
+    meta.update({"status": status, "reasons": " | ".join(reasons)})
+    today = meta["refreshed"]
     store.save_table(table, "combo_shares", facts_db)
     store.save_table(pd.DataFrame({"commodity": list(weights), "weight": list(weights.values())}), "combo_weights", facts_db)
     store.save_table(actual[["event_id", "commodity", "share"]], "combo_actual", facts_db)
+    store.save_table(fill, "events_fill", facts_db)
     store.save_table(bt, "combo_backtest", facts_db)
     store.save_table(pd.DataFrame([meta]), "combo_meta", facts_db)
     hist = store.load_table("combo_history", facts_db)

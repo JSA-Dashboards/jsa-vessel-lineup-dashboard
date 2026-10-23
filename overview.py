@@ -24,6 +24,7 @@ import streamlit as st
 import copy_tools
 from fact_model import changes as ch
 from fact_model import combo_calibration as cc
+from fact_model import fgis_fill as ff
 from fact_model import dimensions as dim
 from fact_model import store
 
@@ -110,12 +111,18 @@ def _calibration(facts_db, mtime=None):
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
+def _fill_table(facts_db, mtime=None):
+    t = store.load_table("events_fill", facts_db)
+    return t if len(t) else pd.DataFrame(columns=ff.FILL_COLS)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
 def _vetting(facts_db, mtime=None):
     return cc.load_vetting(facts_db)
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
-def _prepare(facts_db, mtime, measure, split=True):
+def _prepare(facts_db, mtime, measure, split=True, fill=True):
     """Line-up, events and the week/month/year detail for the six commodities. The change baselines are worked out
     on the WHOLE line-up first (so a region whose newest file came through empty is recognised as a data gap) and
     only then cut down to the six commodities. With `split`, combo boats are divided across the commodities they carry
@@ -125,6 +132,9 @@ def _prepare(facts_db, mtime, measure, split=True):
     events = events.copy()
     events["vessel_w"] = events["vessel_w"].fillna(1.0) if "vessel_w" in events else 1.0
     lineup, events = _tidy(lineup), _tidy(events)
+    if fill:                                    # undisclosed 'RVT' sailings: cargo and tonnage read from USDA's vessel inspections
+        events = ff.apply_fill(events, _fill_table(facts_db, mtime))
+        events["destination"] = events["destination"].astype(str).str.strip().str.title().replace({k.title(): "Unknown" for k in UNK})
     if split:
         table, weights, actual, _ = _calibration(facts_db, mtime)
         lineup = cc.allocate(lineup, table, weights, None, value_cols=("kmt",), count_cols=("vessels",))
@@ -197,11 +207,16 @@ def _measure_toggle(key):
 
 
 def _split_toggle(key):
-    """Combo boats: split across their commodities using USDA-measured shares (default), or leave them out."""
-    return st.checkbox("Split combo boats", value=True, key=f"{key}_split",
-                       help="A combo boat (e.g. CORN/SBM) is listed with one total. Its tonnage and its vessel count are divided "
-                            "across the commodities it carries using what USDA inspections show boats of that type really "
-                            "loaded - never an even split. Off = combo boats are left out.")
+    """Two switches for the parts of the data the line-up reports do not give us directly. -> (split combos, fill undisclosed)."""
+    split = st.checkbox("Split combo boats", value=True, key=f"{key}_split",
+                        help="A combo boat (e.g. CORN/SBM) is listed with one total. Its tonnage and its vessel count are divided "
+                             "across the commodities it carries using what USDA inspections show boats of that type really "
+                             "loaded - never an even split. Off = combo boats are left out.")
+    fill = st.checkbox("Fill undisclosed sailings", value=True, key=f"{key}_fill",
+                       help="Southport lists some sailed boats as RVT (cargo not disclosed). USDA inspects every export vessel by "
+                            "name, so their commodity, tonnage and destination are read from USDA. Off = they stay out of the "
+                            "six commodities.")
+    return split, fill
 
 
 def combo_method_note(facts_db, mtime):
@@ -222,6 +237,12 @@ def combo_method_note(facts_db, mtime):
             "- **Boats still in the line-up** use the average for their combo type (below), from the last 24 months of matched boats.\n"
             "- A combo type too rare to average uses a fitted per-commodity weight (corn 1.0, wheat ~0.6, soybeans/meal ~0.5, "
             "DDGS ~0.3) - **never an even split**.")
+        st.markdown(
+            "**Undisclosed sailings.** Many of Southport's sailed rows (about 28%) "
+            "read RVT (cargo not disclosed). USDA reports every inspected vessel by name with grain, tonnage and destination, so "
+            f"**{meta.get('filled', 0):,.0f} of {meta.get('undisclosed', 0):,.0f}** of them are filled from USDA "
+            f"(~{meta.get('filled_kmt', 0):,.0f} kMT of grain). Grain only: meal or DDGS on those boats stays unknown, and the newest "
+            "sailings are filled once USDA publishes the vessel.")
         c = st.columns(4)
         c[0].markdown(tile("Even split (50/50)", pct(meta.get("mae_equal")), "avg error / boat"), unsafe_allow_html=True)
         c[1].markdown(tile("Corn / wheat double", pct(meta.get("mae_rule")), "avg error / boat"), unsafe_allow_html=True)
@@ -252,6 +273,17 @@ def _vetting_panel(facts_db, mtime, meta):
                    "totals better than leaving combos out.", icon=":material/check_circle:")
     else:
         (st.error if status == "fail" else st.warning)("Needs a look: " + "; ".join(reasons), icon=":material/warning:")
+    if meta.get("fill_n"):
+        f1 = st.columns(4)
+        f1[0].markdown(tile("Undisclosed sailings filled", f"{meta['filled'] / max(meta['undisclosed'], 1):.0%}",
+                            f"{meta['filled']:,.0f} of {meta['undisclosed']:,.0f}"), unsafe_allow_html=True)
+        f1[1].markdown(tile("Fill names the right commodity", f"{meta['fill_commodity_match']:.0%}",
+                            f"tested on {meta['fill_n']:,.0f} boats we know"), unsafe_allow_html=True)
+        f1[2].markdown(tile("Fill tonnage vs known", f"{meta['fill_total_ratio']:.0%}",
+                            f"median boat off by {meta['fill_tonnage_err']:.0%}"), unsafe_allow_html=True)
+        f1[3].markdown(tile("Monthly error vs USDA", f"{meta['wape_learned']:.0%}",
+                            f"was {meta['wape_learned_nofill']:.0%} before the fill", f"Mississippi {meta['wape_usg_learned']:.0%} (was {meta['wape_usg_learned_nofill']:.0%})"),
+                       unsafe_allow_html=True)
     summ = cc.backtest_summary(bt)
     c = st.columns(len(cc.STRATEGIES))
     for col, s_ in zip(c, cc.STRATEGIES):
@@ -260,8 +292,9 @@ def _vetting_panel(facts_db, mtime, meta):
                      unsafe_allow_html=True)
     st.caption("Each of the last 12 months is rebuilt using only boats that sailed BEFORE it, then compared with what USDA inspected "
                "(corn, soybeans, wheat, sorghum; meal is not inspected). USDA inspects before loading, so no method matches exactly; "
-               "what counts is whether splitting the combos closes the gap. The remaining shortfall (negative net) is sailings our "
-               "line-up reports do not capture, not combo splitting.")
+               "what counts is whether splitting the combos closes the gap. The tiles above are with undisclosed sailings filled from USDA; "
+               "the remaining shortfall (negative net) is vessels our line-up reports never listed (about 4% on the Mississippi, up to "
+               "11% in Puget Sound) plus timing.")
     ports = sorted(bt["fgis_port"].unique(), key=lambda p: -bt[bt["fgis_port"] == p]["fgis_kmt"].sum())
     k1, k2 = st.columns(2)
     port = k1.selectbox("USDA port region", ports, key="vet_port")
@@ -601,13 +634,13 @@ def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
 
 def page_summary(facts_db):
     mtime = os.path.getmtime(facts_db)
-    t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
+    t1, t2 = st.columns([3, 3], vertical_alignment="bottom")
     with t1:
         measure = _measure_toggle("sum")
     with t2:
-        split = _split_toggle("sum")
-    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split)
-    if split:
+        split, fill = _split_toggle("sum")
+    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split, fill)
+    if split or fill:
         combo_method_note(facts_db, mtime)
     unit = _unit(measure)
 
@@ -659,8 +692,8 @@ def page_country(country, facts_db):
     c_show, c_area, c_comm = st.columns([1.4, 2.2, 3.4])          # every filter in one row at the top
     with c_show:
         measure = _measure_toggle(key)
-        split = _split_toggle(key)
-    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split)
+        split, fill = _split_toggle(key)
+    lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure, split, fill)
     d_src = detail[detail["source"] == source]
     if d_src.empty:
         st.info(f"No {country} line-up banked yet.")
