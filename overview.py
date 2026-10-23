@@ -381,56 +381,81 @@ def sailed_view(sel, events, measure, months, key, group_by="Commodity"):
 
 
 # ── PAGE: summary ────────────────────────────────────────────────────────────
+# The scopes the summary is organised around: regions first (PNW / USG / TXG for the US), then countries.
+SCOPES = [("Total", {}),
+          ("PNW", {"source": ["US"], "area": ["PNW"]}),
+          ("USG", {"source": ["US"], "area": ["USG"]}),
+          ("TXG", {"source": ["US"], "area": ["TXG"]}),
+          ("United States", {"source": ["US"]}),
+          ("Brazil", {"source": ["Brazil"]}),
+          ("Argentina", {"source": ["Argentina"]})]
+
+
+def _by_commodity(frame, value):
+    return frame.groupby("commodity")[value].sum().reindex(COMMODITIES).fillna(0.0)
+
 
 def _snapshot_matrices(detail, events, measure):
-    """Commodity rows x (United States, Brazil, Argentina, Total): line-up now and sailed month-to-date."""
+    """Commodity rows x scope columns (PNW, USG, TXG, United States, Brazil, Argentina, Total)."""
     unit = _unit(measure)
-    now = detail.groupby(["commodity", "source"])["now"].sum().unstack(fill_value=0.0)
-    w = ch.sailed_windows(events, ["source", "commodity"], measure)
-    mtd = w.pivot_table(index="commodity", columns="source", values="mtd", aggfunc="sum", fill_value=0.0) if not w.empty else pd.DataFrame()
+    order = [n for n, _ in SCOPES if n != "Total"] + ["Total"]
+    now, mtd = {}, {}
+    for name, sel in SCOPES:
+        now[name] = _by_commodity(_apply(detail, sel), "now")
+        ev = _apply(events, sel)
+        w = ch.sailed_windows(ev, ["commodity"], measure) if not ev.empty else pd.DataFrame(columns=["commodity", "mtd"])
+        mtd[name] = _by_commodity(w, "mtd") if not w.empty else pd.Series(0.0, index=COMMODITIES)
 
-    def render(m):
-        m = m.reindex(index=COMMODITIES, columns=list(SRC_LABEL), fill_value=0.0).fillna(0.0)
-        m["Total"] = m.sum(axis=1)
+    def render(cols):
+        m = pd.DataFrame(cols)[order]
         m.loc["Total"] = m.sum()
-        m = m.rename(columns=SRC_LABEL)
         out = m.map(lambda v: "" if v == 0 else _num(v))
         out.insert(0, "Commodity", out.index)
         return out
-    left, right = st.columns(2)
-    with left:
-        st.markdown(f"**Line-up now ({unit})**")
-        t = render(now)
+    for title, cols in ((f"Line-up now ({unit})", now), (f"Sailed month-to-date ({unit})", mtd)):
+        st.markdown(f"**{title}**")
+        t = render(cols)
         st.dataframe(_styled(t, [], "Commodity"), hide_index=True, height=38 * (len(t) + 1))
-    with right:
-        st.markdown(f"**Sailed month-to-date ({unit})**")
-        t = render(mtd)
-        st.dataframe(_styled(t, [], "Commodity"), hide_index=True, height=38 * (len(t) + 1))
+
+
+def _area_table(detail, source):
+    """Areas of one country as rows: line-up now and the week / month / year change."""
+    d = detail[detail["source"] == source]
+    if d["area"].nunique() < 2:
+        return
+    show_change_table(d, "area", "Area")
 
 
 def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
     st.markdown("### Explore")
-    st.caption("Pick what you want to look at: country, port, elevator or terminal, commodity, and line-up or sailed.")
+    st.caption("Pick what you want to look at: country, area, commodity, and line-up or sailed. Port and elevator are there if you need them.")
     c1, c2 = st.columns([3, 2])
     with c1:
         countries = st.pills("Country", list(COUNTRIES), selection_mode="multi", default=list(COUNTRIES), key="ex_country") or list(COUNTRIES)
     with c2:
         view = st.segmented_control("View", ["Line-up", "Sailed"], default="Line-up", key="ex_view") or "Line-up"
     srcs = [COUNTRIES[c] for c in countries]
-    base = pd.concat([detail[["source", "port", "elevator"]], events[["source", "port", "elevator"]]]).drop_duplicates()
+    base = pd.concat([detail[["source", "region", "area", "port", "elevator"]], events[["source", "region", "area", "port", "elevator"]]]).drop_duplicates()
     base = base[base["source"].isin(srcs)]
     # options depend on the selections above them, so those selections are part of each widget's key
-    ports = sorted(base["port"].unique())
-    c3, c4, c5 = st.columns(3)
+    rank = {r: i for i, r in enumerate(_region_order())}
+    areas = sorted(base["area"].unique(), key=lambda a: rank.get(next(iter(base.loc[base["area"] == a, "region"])), 99))
+    c3, c4 = st.columns([3, 2])
     with c3:
-        port = st.multiselect("Port", ports, key=f"ex_port_{'-'.join(srcs)}", placeholder="All ports")
-    elevs = sorted(base[base["port"].isin(port)]["elevator"].unique() if port else base["elevator"].unique())
+        area = st.pills("Area", areas, selection_mode="multi", default=areas, key=f"ex_area_{'-'.join(srcs)}") or areas
     with c4:
-        elev = st.multiselect("Elevator / terminal", elevs, key=f"ex_elev_{'-'.join(srcs)}_{'-'.join(port)}", placeholder="All elevators")
-    with c5:
         comm = st.multiselect("Commodity", COMMODITIES, key="ex_comm", placeholder="All six commodities")
-    sel = {"source": srcs, "port": port or None, "elevator": elev or None, "commodity": comm or COMMODITIES}
-    group_by = st.segmented_control("Group the table by", list(GROUPS), default="Commodity", key="ex_group") or "Commodity"
+    ports = sorted(base[base["area"].isin(area)]["port"].unique())
+    with st.expander("Narrow to a port or elevator (optional)"):
+        k1, k2 = st.columns(2)
+        with k1:
+            port = st.multiselect("Port", ports, key=f"ex_port_{'-'.join(srcs)}_{'-'.join(area)}", placeholder="All ports")
+        elevs = sorted(base[base["area"].isin(area) & (base["port"].isin(port) if port else True)]["elevator"].unique())
+        with k2:
+            elev = st.multiselect("Elevator / terminal", elevs, key=f"ex_elev_{'-'.join(srcs)}_{'-'.join(area)}_{'-'.join(port)}",
+                                  placeholder="All elevators")
+    sel = {"source": srcs, "area": area, "port": port or None, "elevator": elev or None, "commodity": comm or COMMODITIES}
+    group_by = st.segmented_control("Group the table by", list(GROUPS), default="Area", key="ex_group") or "Area"
     if view == "Line-up":
         lineup_view(sel, lineup, detail, meta, gaps, left_out, measure, "ex", group_by)
     else:
@@ -444,16 +469,17 @@ def page_summary(facts_db):
     lineup, events, detail, meta, gaps, left_out = _prepare(facts_db, mtime, measure)
     unit = _unit(measure)
 
-    st.caption(f"Line-up now, in {unit}; change vs last week below each figure.")
-    cols = st.columns(4)
-    for col, (name, srcs) in zip(cols, (("Total line-up", list(SRC_LABEL)), *[(v, [k]) for k, v in SRC_LABEL.items()])):
-        d = detail[detail["source"].isin(srcs)]
+    st.caption(f"Line-up now, in {unit}. Under each figure: change vs last week (wk), month (Mo) and year (Yr).")
+    cols = st.columns(len(SCOPES))
+    for col, (name, sel) in zip(cols, SCOPES):
+        d = _apply(detail, sel)
         if d.empty:
             col.metric(name, "—")
             continue
         r = ch.rollup(d.assign(_t="t"), ["_t"]).iloc[0]
-        col.metric(name, _num(r["now"]), None if pd.isna(r["d_wk"]) else f"{_delta(r['d_wk'])} vs last week",
-                   delta_color="off", help=f"Month: {_delta(r['d_mo'])} · Year: {_delta(r['d_yr'])}")
+        col.metric("US" if name == "United States" else name, _num(r["now"]),
+                   None if pd.isna(r["d_wk"]) else f"{_delta(r['d_wk'])} wk", delta_color="off",
+                   help=f"Change vs last week {_delta(r['d_wk'])} · month {_delta(r['d_mo'])} · year {_delta(r['d_yr'])}")
         col.caption(f"Mo {_delta(r['d_mo'])} · Yr {_delta(r['d_yr'])}")
     _asof_caption(meta, None, left_out)
 
@@ -461,17 +487,17 @@ def page_summary(facts_db):
     _snapshot_matrices(detail, events, measure)
 
     st.markdown("##### Week, month and year change")
-    for name, srcs in (("All three countries", list(SRC_LABEL)), *[(v, [k]) for k, v in SRC_LABEL.items()]):
-        sel = {"source": srcs}
+    st.caption("Open a region or country: commodities for the line-up and for what has sailed. Countries also show their areas.")
+    for name, sel in SCOPES:
         d = _apply(detail, sel)
         if d.empty:
             continue
-        with st.expander(name, expanded=name == "All three countries"):
+        with st.expander(name, expanded=name == "Total"):
             st.markdown("**Line-up**")
             show_change_table(d, "commodity", "Commodity")
-            if len(srcs) == 1:
-                st.markdown("**Line-up by port**")
-                show_port_table(d)
+            if name in ("United States", "Brazil", "Argentina"):
+                st.markdown("**Line-up by area**")
+                _area_table(detail, sel["source"][0])
             ev = _apply(events, sel)
             if not ev.empty:
                 st.markdown("**Sailed**")
