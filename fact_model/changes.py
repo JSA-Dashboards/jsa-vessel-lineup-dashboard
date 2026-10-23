@@ -28,16 +28,19 @@ def _nearest(dates, target, tol_days):
 
 
 def lineup_detail(lineup, measure="vessels"):
-    """Finest-grain table: source, region, port, commodity with `now` and the value a week / month / year
+    """Finest-grain table: source, region, port, elevator, commodity with `now` and the value a week / month / year
     earlier (NaN where there is no usable snapshot). Also returns per-region metadata (as_of, baseline dates,
     note). Sum these columns up to any level with rollup()."""
     lineup = lineup.assign(report_date=pd.to_datetime(lineup["report_date"]))
+    if "elevator" not in lineup:
+        lineup = lineup.assign(elevator="")
+    lineup["elevator"] = lineup["elevator"].fillna("").astype(str)
     parts, metas = [], []
     for src, g in lineup.groupby("source"):
         dates = [pd.Timestamp(d) for d in sorted(g["report_date"].unique())]
         newest = dates[-1]
         tot = g.groupby(["region", "report_date"])["vessels"].sum()
-        agg = g.groupby(["report_date", "region", "port", "commodity"])[measure].sum()
+        agg = g.groupby(["report_date", "region", "port", "elevator", "commodity"])[measure].sum()
         for region in g["region"].unique():
             t = lambda d: float(tot.get((region, d), 0.0))
             good = [d for d in dates if t(d) > 0]
@@ -70,10 +73,10 @@ def lineup_detail(lineup, measure="vessels"):
             w = w.reset_index()
             w.insert(0, "region", region)
             w.insert(0, "source", src)
-            parts.append(w[["source", "region", "port", "commodity", "now", *PREV]])
+            parts.append(w[["source", "region", "port", "elevator", "commodity", "now", *PREV]])
             metas.append({"source": src, "region": region, "as_of": as_of, "wk_date": wk, "mo_date": mo,
                           "yr_date": yr, "note": note, "newest": newest})
-    detail = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["source", "region", "port", "commodity", "now", *PREV])
+    detail = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["source", "region", "port", "elevator", "commodity", "now", *PREV])
     detail[["now", *PREV]] = detail[["now", *PREV]].astype(float)
     return detail, pd.DataFrame(metas)
 
