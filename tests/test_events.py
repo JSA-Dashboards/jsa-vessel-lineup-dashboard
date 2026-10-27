@@ -182,5 +182,7 @@ def test_fgis_reconciliation_diff_ratio_and_unmatched_commodities():
 def test_every_us_port_has_an_fgis_region():
     from fact_model import dimensions as dim
     cfg = dim.default_config()
-    us_ports = cfg.port_region[cfg.port_region["country"] == "US"]["port"]
+    pr = cfg.port_region
+    # Great Lakes ports are sailed-only rows read FROM USDA, so they deliberately carry no region to reconcile against
+    us_ports = pr[(pr["country"] == "US") & (pr["region"] != "Great Lakes")]["port"]
     assert all(p in cfg.fgis_by_port for p in us_ports)
