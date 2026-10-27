@@ -26,7 +26,7 @@ rc=0
     rc=$?
     echo "=== brazil import finished $(date -Is) rc=$rc ==="
 
-    if [ $rc -eq 0 ]; then
+    if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then          # 3 = some PDF was rejected; still bank the ones that loaded
         (
             flock 8
             "$PYTHON" refresh_facts.py --brazil || echo "WARNING: facts refresh failed (DB push continues)"

@@ -226,6 +226,7 @@ def run(backfill=False, days=4):
     last_id = state["last_processed_id"]
 
     processed_ids = []
+    rejected = []          # PDFs that were found but could not be loaded: the run then exits non-zero so cron-alert emails it
 
     for msg in messages:
         msg_id = msg["id"]
@@ -258,6 +259,7 @@ def run(backfill=False, days=4):
                 pdf_bytes = _graph_get_bytes(token, att_url_dl)
             except Exception as e:
                 log.error(f"Download failed for {att_name}: {e}")
+                rejected.append(att_name)
                 continue
 
             # Write to temp file and parse
@@ -269,6 +271,7 @@ def run(backfill=False, days=4):
                 parsed = brazil_parser.parse_pdf(tmp_path)
             except Exception as e:
                 log.error(f"Parse failed for {att_name}: {e}")
+                rejected.append(att_name)
                 continue
             finally:
                 try:
@@ -288,6 +291,7 @@ def run(backfill=False, days=4):
                 loose = brazil_parser.validation_error(parsed, rel_tol=0.01)
                 if loose:
                     log.error(f"{att_name}: NOT loaded - {loose}")
+                    rejected.append(att_name)
                     continue
                 log.warning(f"{att_name}: loaded with a small total mismatch - {strict}")
 
@@ -315,6 +319,7 @@ def run(backfill=False, days=4):
         if not last_id:
             state["last_processed_id"] = messages[0]["id"]
             _save_state(state)
+    return rejected
 
 
 if __name__ == "__main__":
@@ -336,7 +341,10 @@ if __name__ == "__main__":
     _load_env()
 
     try:
-        run(backfill=args.backfill, days=args.days)
+        rejected = run(backfill=args.backfill, days=args.days)
+        if rejected:
+            log.error(f"{len(rejected)} PDF(s) NOT loaded: {', '.join(rejected)}")
+            sys.exit(3)
     except Exception as e:
         log.exception(f"Fatal error: {e}")
         sys.exit(1)

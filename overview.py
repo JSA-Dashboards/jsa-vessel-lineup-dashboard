@@ -668,7 +668,13 @@ def page_summary(facts_db):
 
     st.caption(f"Line-up now, in {unit}. Under each figure: change vs last week (wk), month (Mo) and year (Yr).")
     cols = st.columns(len(SCOPES))
-    for col, (name, sel) in zip(cols, SCOPES):
+    # Brazil and Argentina are broken into their areas the way the US is broken into PNW / USG / TXG
+    area_tiles = [("Brazil North Arc", {"source": ["Brazil"], "area": ["Brazil North Arc"]}),
+                  ("Brazil South/SE", {"source": ["Brazil"], "area": ["Brazil South/Southeast"]}),
+                  ("Arg. Up-River", {"source": ["Argentina"], "area": ["Argentina Up-River"]}),
+                  ("Arg. South", {"source": ["Argentina"], "area": ["Argentina South"]}),
+                  ("Uruguay", {"source": ["Argentina"], "area": ["Uruguay"]})]
+    for col, (name, sel) in list(zip(cols, SCOPES)) + list(zip(st.columns(len(SCOPES)), area_tiles)):
         d = _apply(detail, sel)
         label = "US" if name == "United States" else name
         if d.empty:
