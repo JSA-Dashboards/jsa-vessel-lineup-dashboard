@@ -16,6 +16,7 @@ rc=0
     echo "=== combo shares start $(date -Is) ==="
     (
         flock 8                                  # same lock as the pollers: one writer of facts.db + git at a time
+        "$PYTHON" refresh_great_lakes.py || echo "great lakes refresh failed (continuing)"   # USDA lake-port loadings, adds a week on Thursdays
         "$PYTHON" refresh_combo_shares.py
         rc=$?
         echo "refresh rc=$rc"

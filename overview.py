@@ -39,6 +39,7 @@ SRC_LABEL = {"US": "United States", "Brazil": "Brazil", "Argentina": "Argentina"
 COUNTRIES = {v: k for k, v in SRC_LABEL.items()}               # label -> source
 AREA_SHORT = {"US Gulf": "USG", "Texas Gulf": "TXG", "PNW": "PNW"}
 MEASURES = {"Vessels": "vessels", "Volume (kMT)": "kmt"}
+DEST_FIX = {"Un Kingdom": "United Kingdom", "Un Arab Em": "United Arab Emirates", "Un Arab Emirates": "United Arab Emirates"}
 UNK = {"UNKNOWN", "C/P", "?", "", "RVT", "NOT AVAILABLE", "NAN", "NONE", "WHT", "CORN", "SBM", "YSB", "SORGHUM", "RICE"}   # codes the reports sometimes put in the destination column
 GROUPS = {"Commodity": "commodity", "Country": "country", "Area": "area", "Port": "port", "Elevator / terminal": "elevator"}
 PREV_COLS = ch.PREV
@@ -97,7 +98,7 @@ def _place(df):
 
 def _tidy(df):
     df = df.copy()
-    df["destination"] = df["destination"].astype(str).str.strip().str.title().replace({k.title(): "Unknown" for k in UNK})
+    df["destination"] = df["destination"].astype(str).str.strip().str.title().replace({k.title(): "Unknown" for k in UNK}).replace(DEST_FIX)
     df["port"] = _place(df)
     df["elevator"] = df["elevator"].fillna("").astype(str).replace({"UNMAPPED": "No terminal named", "": "No terminal named"})
     df["country"] = df["source"].map(SRC_LABEL)
@@ -554,6 +555,7 @@ SCOPES = [("Total", {}),
           ("PNW", {"source": ["US"], "area": ["PNW"]}),
           ("USG", {"source": ["US"], "area": ["USG"]}),
           ("TXG", {"source": ["US"], "area": ["TXG"]}),
+          ("Great Lakes", {"source": ["US"], "area": ["Great Lakes"]}),           # sailed only: USDA loadings, no line-up exists
           ("United States", {"source": ["US"]}),
           ("Brazil", {"source": ["Brazil"]}),
           ("Argentina", {"source": ["Argentina"]})]
@@ -650,7 +652,12 @@ def page_summary(facts_db):
         d = _apply(detail, sel)
         label = "US" if name == "United States" else name
         if d.empty:
-            col.markdown(tile(label, "—"), unsafe_allow_html=True)
+            sailed = _apply(events, sel)
+            if sailed.empty:
+                col.markdown(tile(label, "—"), unsafe_allow_html=True)
+            else:                                           # a region with loadings but no line-up (Great Lakes)
+                w = ch.sailed_windows(sailed, ["source"], measure).iloc[0]
+                col.markdown(tile(label, "—", "no line-up", f"Sailed MTD {_num(w['mtd'])} · {_unit(measure)}"), unsafe_allow_html=True)
             continue
         r = ch.rollup(d.assign(_t="t"), ["_t"]).iloc[0]
         col.markdown(tile(label, _num(r["now"]), f"{_arrow(r['d_wk'])} wk", f"Mo {_delta(r['d_mo'])} · Yr {_delta(r['d_yr'])}"),
@@ -664,15 +671,16 @@ def page_summary(facts_db):
     st.caption("Open a region or country: commodities for the line-up and for what has sailed. Countries also show their areas.")
     for name, sel in SCOPES:
         d = _apply(detail, sel)
-        if d.empty:
+        ev = _apply(events, sel)
+        if d.empty and ev.empty:
             continue
-        with st.expander(name, expanded=name == "Total"):
-            st.markdown("**Line-up**")
-            show_change_table(d, "commodity", "Commodity", f"sum_ct_{name}")
+        with st.expander(name + (" (sailed only)" if d.empty else ""), expanded=name == "Total"):
+            if not d.empty:
+                st.markdown("**Line-up**")
+                show_change_table(d, "commodity", "Commodity", f"sum_ct_{name}")
             if name in ("United States", "Brazil", "Argentina"):
                 st.markdown("**Line-up by area**")
                 _area_table(detail, sel["source"][0])
-            ev = _apply(events, sel)
             if not ev.empty:
                 st.markdown("**Sailed**")
                 t = _sailed_table(ch.sailed_windows(ev, ["commodity"], measure), "Commodity", "commodity")
@@ -698,7 +706,7 @@ def page_country(country, facts_db):
     if d_src.empty:
         st.info(f"No {country} line-up banked yet.")
         return
-    regions = [r for r in _region_order() if r in set(d_src["region"])]
+    regions = [r for r in _region_order() if r in set(d_src["region"]) | set(events.loc[events["source"] == source, "region"])]
     with c_area:
         if len(regions) > 1:
             area = st.pills("Area", regions, selection_mode="multi", default=regions, key=f"{key}_area",
