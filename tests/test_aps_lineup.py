@@ -65,7 +65,7 @@ def test_workbook_becomes_southport_shaped_vessel_rows_and_snapshots(tmp_path):
 def snap(date, region, v, k):
     return pd.DataFrame([{"report_date": pd.Timestamp(date), "source": "US", "region": region, "port": "P", "elevator": "E", "commodity": "Corn",
                           "combo": "", "destination": "X", "month": pd.Timestamp(date).replace(day=1), "marketing_year": "2025/26", "kmt": k,
-                          "vessels": v, "vessels_no_tonnage": 0.0, "mapped": True, "unmapped_reason": ""}])
+                          "vessels": v, "vessels_no_tonnage": 0, "mapped": True, "unmapped_reason": ""}])
 
 
 def test_overlap_scales_and_scaling_put_aps_on_the_southport_basis():

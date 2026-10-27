@@ -182,6 +182,9 @@ def overlap_scales(aps_snaps, facts, max_lag_days=1):
 def scale_snapshot(snap, scales):
     """Divide each region's vessels and kMT by its APS/Southport ratio, so APS history reads on the Southport basis."""
     out = snap.copy()
+    for col in ("vessels", "kmt", "vessels_no_tonnage"):
+        if col in out:
+            out[col] = out[col].astype(float)
     for reg, (rv, rk, _) in scales.items():
         m = out["region"] == reg
         out.loc[m, "vessels"] = out.loc[m, "vessels"] / rv
