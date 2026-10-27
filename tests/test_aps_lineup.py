@@ -84,10 +84,11 @@ def test_backfill_loads_only_uncovered_dates_scaled_and_is_idempotent(tmp_path):
         workbook(str(folder / f"{d}__lineups.xlsx"), d)
     db = str(tmp_path / "f.db")
     store.save_lineup_snapshot(pd.concat([snap("2026-01-10", "PNW", 1, 70), snap("2026-01-10", "US Gulf", 3, 100)]), db)       # Southport day
+    store.save_lineup_snapshot(snap("2024-05-01", "Brazil North Arc", 9, 500).assign(source="Brazil"), db)                 # another source's day must not block
     r = ap.backfill(str(folder), db, since="2024-01-01")
     assert r["to_load"] == 2 and r["first"] == "2024-05-01" and r["scales"]["PNW"][2] == 1
     lu = store.load_lineup(db)
-    assert sorted(lu["report_date"].dt.strftime("%Y-%m-%d").unique()) == ["2024-05-01", "2024-05-02", "2026-01-10"]
+    assert sorted(lu[lu["source"] == "US"]["report_date"].dt.strftime("%Y-%m-%d").unique()) == ["2024-05-01", "2024-05-02", "2026-01-10"]
     assert (lu[lu["report_date"] == "2026-01-10"]["kmt"].sum()) == pytest.approx(170)                                   # Southport day untouched
     prov = store.load_table("lineup_provenance", db)
     assert len(prov) == 2 and set(prov["provider"]) == {"APS"}

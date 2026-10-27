@@ -204,7 +204,8 @@ def backfill(folder, facts_db=None, since="2023-09-01", skip_within_days=2, cfg=
     facts = store.load_lineup(facts_db)
     prov = store.load_table(PROVENANCE, facts_db, ["report_date"])
     aps_loaded = set(pd.to_datetime(prov["report_date"]).dt.normalize()) if len(prov) else set()
-    southport = sorted(set(facts["report_date"].dt.normalize().unique()) - aps_loaded)
+    us = facts[facts["source"] == "US"]                          # coverage = US snapshots only (Brazil/Argentina dates are irrelevant)
+    southport = sorted(set(us["report_date"].dt.normalize().unique()) - aps_loaded)
     snaps, errors = {}, 0
     for f in sorted(glob.glob(os.path.join(folder, "*.xls*"))):
         fd = pd.Timestamp(os.path.basename(f)[:10])
@@ -217,7 +218,7 @@ def backfill(folder, facts_db=None, since="2023-09-01", skip_within_days=2, cfg=
             continue
         if len(snap):
             snaps[rd] = snap
-    scales = overlap_scales(snaps, facts[facts["report_date"].dt.normalize().isin(southport)])
+    scales = overlap_scales(snaps, us[us["report_date"].dt.normalize().isin(southport)])
     to_load = [d for d in sorted(snaps) if d not in aps_loaded and not any(abs((d - s).days) <= skip_within_days for s in southport)]
     summary = {"aps_dates": len(snaps), "to_load": len(to_load), "already_loaded": len(aps_loaded), "errors": errors,
                "scales": {r: (round(v[0], 3), round(v[1], 3), v[2]) for r, v in scales.items()},
