@@ -255,3 +255,28 @@ def test_without_a_grand_total_line_the_sum_of_port_totals_is_the_reference():
 def test_a_printed_grand_total_still_wins_over_the_port_sum():
     from brazil_parser import validation_error
     assert "lineup total" in validation_error(_parsed(200, 100, 100))
+
+
+def _words(top, **cols):
+    from brazil_parser import LINEUP_COLS
+    x0 = dict(LINEUP_COLS)
+    return (top, [{"text": t, "x0": x0[c] + 1, "top": top} for c, t in cols.items()])
+
+
+def test_a_port_that_runs_onto_the_next_page_keeps_its_name():
+    from brazil_parser import parse_page_rows, build_col_boundaries, LINEUP_COLS
+    cb = build_col_boundaries(LINEUP_COLS)
+    carry = {}
+    p1 = [_words(100, port="PARANAGUA", berth="PASA", vessel="ALPHA", status="ETA", product="SBS", mt="60.000")]
+    r1, _, _ = parse_page_rows(p1, cb, date(2026, 5, 13), always_data=True, carry=carry)
+    p2 = [_words(100, berth="PASA", vessel="BRAVO", status="WTG", product="SBS", mt="65.000")]   # headerless continuation page
+    r2, _, _ = parse_page_rows(p2, cb, date(2026, 5, 13), always_data=True, carry=carry)
+    assert [r["port"] for r in r1 + r2] == ["PARANAGUA", "PARANAGUA"] and r2[0]["berth"] == "PASA"
+
+
+def test_a_stats_table_row_is_not_a_vessel():
+    from brazil_parser import parse_page_rows, build_col_boundaries, LINEUP_COLS
+    cb = build_col_boundaries(LINEUP_COLS)
+    rows = [_words(100, berth="Week 47", vessel="MVs", status="MT MT"), _words(120, berth="SBS", vessel="9", status="-57%")]
+    r, _, _ = parse_page_rows(rows, cb, date(2024, 11, 21), always_data=True, carry={"port": "TUBARAO"})
+    assert r == []

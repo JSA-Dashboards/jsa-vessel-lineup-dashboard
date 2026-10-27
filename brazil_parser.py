@@ -342,9 +342,12 @@ def _is_total_row(texts_set):
     return "Total" in texts_set or "TOTAL" in texts_set
 
 
-def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
+def parse_page_rows(rows, col_boundaries, report_date, always_data=False, carry=None):
     """
     Parse vessel/continuation rows from a pre-grouped rows list.
+
+    `carry` ({'port', 'berth'}) is read at the start and updated at the end: a port that runs onto a headerless
+    continuation page is not named again there, so its rows inherit the port from the page before.
 
     Returns:
         records        – list of row dicts
@@ -355,8 +358,9 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
     port_totals = {}
     grand_total_pdf = None
 
-    current_port = None
-    current_berth = None
+    carry = carry if carry is not None else {}
+    current_port = carry.get("port")
+    current_berth = carry.get("berth")
     prev_record = None
 
     in_data = always_data
@@ -478,6 +482,8 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
                 inferred = infer_status_from_dates(eta_d, etb_d, report_date)
                 if inferred:
                     clean_status = inferred
+            if clean_status not in VALID_STATUSES and not (eta_d or etb_d or product_norm):
+                continue                 # no status, no dates, no cargo: a stats-table row ('Week 47', '% VAR'), not a vessel
 
             record = {
                 "report_date": report_date,
@@ -539,6 +545,7 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
             }
             records.append(record)
 
+    carry["port"], carry["berth"] = current_port, current_berth
     return records, port_totals, grand_total_pdf
 
 
@@ -579,6 +586,7 @@ def parse_pdf(pdf_path) -> dict:
         cols = {"lineup": LINEUP_COLS, "sailed": SAILED_COLS}
         hdr_ref = {"lineup": LINEUP_HDR_REF, "sailed": SAILED_HDR_REF}
         seen_header = {"lineup": False, "sailed": False}
+        carry = {"lineup": {}, "sailed": {}}      # port / berth still open at the end of the previous page, per section
         for page_idx, page in enumerate(pdf.pages):
             if page_idx == 0:      # page 1 = summary only; no vessel rows
                 continue
@@ -604,9 +612,10 @@ def parse_pdf(pdf_path) -> dict:
                     lineup_summary = extract_lineup_summary(rows, header_top)
             if header_top is not None:
                 seen_header[section] = True
+                carry[section] = {}                  # a headed page starts at a port heading
 
             records, port_totals, grand_total = parse_page_rows(
-                rows, col_boundaries, report_date, always_data=always_data
+                rows, col_boundaries, report_date, always_data=always_data, carry=carry[section]
             )
 
             if is_sailed:

@@ -51,6 +51,18 @@ def test_an_empty_snapshot_of_a_busy_region_is_a_gap_not_a_zero():
     assert pd.Timestamp("2026-10-21") in ch.gap_dates(l)
 
 
+def test_a_stray_region_seen_on_a_few_dates_does_not_turn_every_other_date_into_a_data_gap():
+    # Brazil, Oct 2026: 3 dates carried a 'UNMAPPED' region (rows whose port heading was lost at a PDF page break), 10+ vessels
+    # each time. That made UNMAPPED look like a region that "normally holds vessels", so the other 448 dates were dropped as gaps.
+    days = pd.date_range("2026-06-01", periods=60)
+    main = pd.concat([snap(d, [("P", "Corn", 40)], source="Brazil", region="Brazil North Arc") for d in days])
+    stray = pd.concat([snap(d, [("nan", "Corn", 12)], source="Brazil", region="UNMAPPED") for d in days[[5, 20, 40]]])
+    l = pd.concat([main, stray])
+    assert ch.gap_dates(l) == set()
+    d, m = ch.lineup_detail(l, "vessels")
+    assert m.set_index("region").loc["UNMAPPED", "note"] == ""        # it is not 'stuck' at its last sighting either
+
+
 def test_a_source_without_history_drops_out_of_the_change_instead_of_counting_as_growth():
     us = pd.concat([snap("2026-10-22", [("A", "Corn", 10)]), snap("2026-10-15", [("A", "Corn", 8)])])
     ar = snap("2026-10-22", [("S", "Corn", 40)], source="Argentina", region="Argentina Up-River")

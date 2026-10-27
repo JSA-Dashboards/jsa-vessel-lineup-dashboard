@@ -15,8 +15,17 @@ import numpy as np
 import pandas as pd
 
 MIN_NORMAL_VESSELS = 10        # a region that usually holds at least this many and suddenly holds 0 is a data gap
+RECENT_DATES = 40              # ...and "usually" means it is on at least half of the last RECENT_DATES snapshots
 TOL = {"wk": 3, "mo": 5, "yr": 10}
 PREV = ["prev_wk", "prev_mo", "prev_yr"]
+
+
+def _regular(s):
+    """True if a region's per-snapshot series (indexed by date, 0 where absent) is normally present: it appears on at
+    least half of the last RECENT_DATES snapshots. A stray region seen on a few dates (e.g. rows whose port heading
+    was lost in a PDF) is not 'normally 10+ vessels', so its absence elsewhere is not a data gap."""
+    s = s.sort_index().iloc[-RECENT_DATES:]
+    return len(s) > 0 and (s > 0).mean() >= 0.5
 
 
 def _nearest(dates, target, tol_days):
@@ -50,7 +59,7 @@ def lineup_detail(lineup, measure="vessels", uncovered=None):
             newest = rdates[-1]
             good = [d for d in rdates if t(d) > 0]
             typical = float(np.median([t(d) for d in good[-20:]])) if good else 0.0
-            gap_prone = typical >= MIN_NORMAL_VESSELS
+            gap_prone = typical >= MIN_NORMAL_VESSELS and _regular(pd.Series({d: t(d) for d in rdates}))
             usable = good if gap_prone else rdates
             as_of, note = newest, ""
             if gap_prone and t(newest) == 0:
@@ -174,6 +183,6 @@ def gap_dates(lineup):
     for region in tot.columns:
         s = tot[region].reindex(all_dates).fillna(0.0)
         good = s[s > 0]
-        if len(good) and float(good.iloc[-20:].median()) >= MIN_NORMAL_VESSELS:
+        if len(good) and float(good.iloc[-20:].median()) >= MIN_NORMAL_VESSELS and _regular(s):
             bad |= set(s[s == 0].index)
     return bad
