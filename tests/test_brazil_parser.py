@@ -227,3 +227,31 @@ def test_mt_parsing_unit():
     assert parse_mt("-") == 0
     assert parse_mt("") == 0
     assert parse_mt("1.824.704") == 1824704
+
+
+# ── layout changes seen in October 2026 (no PDF needed) ──────────────────────
+
+def test_a_product_name_spilling_into_the_mt_column_still_gives_the_tonnage():
+    from brazil_parser import parse_mt
+    assert parse_mt("OIL 4.500") == 4500 and parse_mt("63.000") == 63000 and parse_mt("-") == 0 and parse_mt("5.118.476") == 5118476
+
+
+def _parsed(lineup_pdf=None, port_sum=None, parsed=100, sailed_pdf=None, sailed_port_sum=None, sailed_parsed=50):
+    return {"report_date": date(2026, 10, 22), "lineup": [object()], "validation": {
+        "lineup_grand_total_pdf": lineup_pdf, "lineup_port_total_sum_pdf": port_sum, "lineup_grand_total_parsed": parsed,
+        "sailed_grand_total_pdf": sailed_pdf, "sailed_port_total_sum_pdf": sailed_port_sum, "sailed_grand_total_parsed": sailed_parsed,
+        "lineup_excluded_pdf_mt": 0, "sailed_excluded_pdf_mt": 0}}
+
+
+def test_without_a_grand_total_line_the_sum_of_port_totals_is_the_reference():
+    from brazil_parser import validation_error
+    # APS stopped printing 'Grand Total' on 2026-10-22; the per-port totals still add up to the same figure
+    assert validation_error(_parsed(None, 100, 100, None, 50, 50)) is None
+    assert "lineup total" in validation_error(_parsed(None, 5000, 100, None, 50, 50))
+    assert validation_error(_parsed(None, 5000, 100, None, 50, 50), rel_tol=0.99) is None
+    assert validation_error(_parsed(None, None, 100)) == "no line-up grand total in the PDF"                # nothing to check against
+
+
+def test_a_printed_grand_total_still_wins_over_the_port_sum():
+    from brazil_parser import validation_error
+    assert "lineup total" in validation_error(_parsed(200, 100, 100))

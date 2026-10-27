@@ -5,6 +5,8 @@ Usage (CLI test):
     python brazil_parser.py "path/to/APS Brz Consolidated line-up 2026.10.06.pdf"
 """
 
+import re
+
 import pdfplumber
 from datetime import datetime, date
 from collections import defaultdict
@@ -178,6 +180,12 @@ def parse_mt(s):
     try:
         return int(cleaned)
     except ValueError:
+        # A long product name can spill into the MT column ('OIL 4.500' for SUNFLOWER OIL): take the trailing number.
+        m = re.search(r"(\d[\d.,]*)\s*$", s)
+        if m:
+            digits = m.group(1).replace(".", "").replace(",", "")
+            if digits.isdigit():
+                return int(digits)
         try:
             return int(float(cleaned))
         except Exception:
@@ -664,6 +672,10 @@ def parse_pdf(pdf_path) -> dict:
             "lineup_grand_total_parsed": lineup_parsed_total,
             "sailed_grand_total_pdf": sailed_grand_total_pdf,
             "sailed_grand_total_parsed": sailed_parsed_total,
+            # The PDFs normally end each section with a 'Grand Total'; since 2026-10-22 they do not. The per-port totals are still
+            # printed, and their sum is the same number, so validation falls back on it.
+            "lineup_port_total_sum_pdf": sum(lineup_port_totals.values()) if lineup_port_totals else None,
+            "sailed_port_total_sum_pdf": sum(sailed_port_totals.values()) if sailed_port_totals else None,
             "lineup_excluded_pdf_mt": lineup_excluded_pdf,
             "sailed_excluded_pdf_mt": sailed_excluded_pdf,
             "port_mismatches": port_mismatches,
@@ -684,6 +696,8 @@ def validation_error(parsed, rel_tol=0.0, abs_tol=10):
     for label, pdf_key, got in (("lineup", "lineup_grand_total_pdf", v["lineup_grand_total_parsed"] + v.get("lineup_excluded_pdf_mt", 0)),
                                 ("sailed", "sailed_grand_total_pdf", v["sailed_grand_total_parsed"] + v.get("sailed_excluded_pdf_mt", 0))):
         pdf = v[pdf_key]
+        if pdf is None:
+            pdf = v.get(f"{label}_port_total_sum_pdf")           # no Grand Total line: the sum of the port totals stands in
         if pdf is None:
             if label == "lineup":
                 return "no line-up grand total in the PDF"
