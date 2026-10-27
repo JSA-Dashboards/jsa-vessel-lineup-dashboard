@@ -193,7 +193,7 @@ def _save_state(state):
 # Main
 # ---------------------------------------------------------------------------
 
-def run(backfill=False):
+def run(backfill=False, days=4):
     import brazil_parser  # type: ignore
     import brazil_db  # type: ignore
 
@@ -205,7 +205,7 @@ def run(backfill=False):
 
     # Scan by date, not "newest 50": the inbox takes ~200 messages a day, so a PDF that arrived in the
     # afternoon can be buried by the next morning's run. $filter + $orderby on the SAME property works.
-    since = (datetime.utcnow() - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     msgs_url = f"{base}/mailFolders/inbox/messages"
     params = {
         "$filter": f"receivedDateTime ge {since}",
@@ -220,7 +220,7 @@ def run(backfill=False):
         url, params = data.get("@odata.nextLink"), None
         if not url:
             break
-    log.info(f"Fetched {len(messages)} inbox messages from the last 4 days")
+    log.info(f"Fetched {len(messages)} inbox messages from the last {days} days")
 
     state = _load_state()
     last_id = state["last_processed_id"]
@@ -325,12 +325,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Process all matching emails (don't update state)",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=4,
+        help="How far back in the inbox to look (default 4); raise it to catch up after an outage",
+    )
     args = parser.parse_args()
 
     _load_env()
 
     try:
-        run(backfill=args.backfill)
+        run(backfill=args.backfill, days=args.days)
     except Exception as e:
         log.exception(f"Fatal error: {e}")
         sys.exit(1)
