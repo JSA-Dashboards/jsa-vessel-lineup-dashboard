@@ -151,3 +151,85 @@ def snapshot(path, fallback_date, cfg=None):
     """APS workbook -> (report_date, lineup_fact rows for USG + PNW)."""
     rd, v = read_workbook(path, fallback_date)
     return rd, lu.us_lineup_snapshot(v, rd, cfg)
+
+
+# ── backfill: put APS history on the Southport basis and load the dates Southport does not cover ──────────────────────────
+
+REGIONS = ("US Gulf", "PNW")
+PROVENANCE = "lineup_provenance"
+
+
+def overlap_scales(aps_snaps, facts, max_lag_days=1):
+    """Ratio APS / Southport per region on the days both exist (APS within `max_lag_days`), from vessel counts and tonnage:
+    -> {region: (vessels_ratio, kmt_ratio, n_dates)}. APS lists fewer PNW boats than Southport (~0.84 vessels, ~0.92 kMT) and about
+    the same on the Gulf (~1.03 / ~1.05), stable across quarters; these ratios are divided out of the backfilled history."""
+    f = facts[(facts["source"] == "US") & facts["region"].isin(REGIONS)]
+    fd = sorted(f["report_date"].dt.normalize().unique())
+    sums = {r: [0.0, 0.0, 0.0, 0.0, 0] for r in REGIONS}
+    for d in fd:
+        near = [r for r in aps_snaps if abs((r - d).days) <= max_lag_days]
+        if not near:
+            continue
+        snap = aps_snaps[min(near, key=lambda x: abs((x - d).days))]
+        for reg in REGIONS:
+            a, b = snap[snap["region"] == reg], f[(f["report_date"] == d) & (f["region"] == reg)]
+            if b["vessels"].sum() > 0:
+                s = sums[reg]
+                s[0] += a["vessels"].sum(); s[1] += b["vessels"].sum(); s[2] += a["kmt"].sum(); s[3] += b["kmt"].sum(); s[4] += 1
+    return {r: (s[0] / s[1], s[2] / s[3], int(s[4])) for r, s in sums.items() if s[4] and s[1] and s[3]}
+
+
+def scale_snapshot(snap, scales):
+    """Divide each region's vessels and kMT by its APS/Southport ratio, so APS history reads on the Southport basis."""
+    out = snap.copy()
+    for reg, (rv, rk, _) in scales.items():
+        m = out["region"] == reg
+        out.loc[m, "vessels"] = out.loc[m, "vessels"] / rv
+        out.loc[m, "kmt"] = out.loc[m, "kmt"] / rk
+        if "vessels_no_tonnage" in out:
+            out.loc[m, "vessels_no_tonnage"] = out.loc[m, "vessels_no_tonnage"] / rv
+    return out
+
+
+def backfill(folder, facts_db=None, since="2023-09-01", skip_within_days=1, cfg=None, dry_run=False):
+    """Load APS line-up history into facts.db for every date Southport does not cover (no Southport snapshot within
+    `skip_within_days`), scaled to the Southport basis, and record which dates came from APS in the `lineup_provenance` table.
+    Idempotent. -> summary dict."""
+    import glob
+    import os
+    from . import store
+    facts = store.load_lineup(facts_db)
+    prov = store.load_table(PROVENANCE, facts_db, ["report_date"])
+    aps_loaded = set(pd.to_datetime(prov["report_date"]).dt.normalize()) if len(prov) else set()
+    southport = sorted(set(facts["report_date"].dt.normalize().unique()) - aps_loaded)
+    snaps, errors = {}, 0
+    for f in sorted(glob.glob(os.path.join(folder, "*.xls*"))):
+        fd = pd.Timestamp(os.path.basename(f)[:10])
+        if fd < pd.Timestamp(since):
+            continue
+        try:
+            rd, snap = snapshot(f, fd, cfg)
+        except Exception:
+            errors += 1
+            continue
+        if len(snap):
+            snaps[rd] = snap
+    scales = overlap_scales(snaps, facts[facts["report_date"].dt.normalize().isin(southport)])
+    to_load = [d for d in sorted(snaps) if d not in aps_loaded and not any(abs((d - s).days) <= skip_within_days for s in southport)]
+    summary = {"aps_dates": len(snaps), "to_load": len(to_load), "already_loaded": len(aps_loaded), "errors": errors,
+               "scales": {r: (round(v[0], 3), round(v[1], 3), v[2]) for r, v in scales.items()},
+               "first": str(to_load[0].date()) if to_load else None, "last": str(to_load[-1].date()) if to_load else None}
+    if dry_run or not to_load:
+        return summary
+    if set(scales) != set(REGIONS):
+        raise RuntimeError(f"cannot scale APS to Southport: overlap found for {sorted(scales)} only")
+    rows = []
+    for d in to_load:
+        s = scale_snapshot(snaps[d], scales)
+        store.save_lineup_snapshot(s, facts_db)
+        rows.append({"report_date": d, "source": "US", "provider": "APS", "regions_covered": ",".join(REGIONS),
+                     "scale_vessels_pnw": scales["PNW"][0], "scale_kmt_pnw": scales["PNW"][1],
+                     "scale_vessels_usg": scales["US Gulf"][0], "scale_kmt_usg": scales["US Gulf"][1], "overlap_dates": scales["PNW"][2]})
+    new = pd.DataFrame(rows)
+    store.save_table(pd.concat([prov, new], ignore_index=True) if len(prov) else new, PROVENANCE, facts_db)
+    return summary

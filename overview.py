@@ -140,7 +140,27 @@ def _prepare(facts_db, mtime, measure, split=True, fill=True):
         table, weights, actual, _ = _calibration(facts_db, mtime)
         lineup = cc.allocate(lineup, table, weights, None, value_cols=("kmt",), count_cols=("vessels",))
         events = cc.allocate(events, table, weights, actual, value_cols=("kmt",), count_cols=("vessel_w",), id_col="event_id")
-    detail, meta = ch.lineup_detail(lineup, measure)
+    prov = store.load_table("lineup_provenance", facts_db, ["report_date"])
+    uncovered, aps_dates = set(), {}
+    if len(prov):
+        regions = lineup.groupby("source")["region"].unique().to_dict()
+        for r in prov.itertuples():
+            d = pd.Timestamp(r.report_date).normalize()
+            aps_dates[d] = r
+            for reg in regions.get(r.source, []):
+                if reg not in str(r.regions_covered).split(","):
+                    uncovered.add((r.source, reg, d))
+    detail, meta = ch.lineup_detail(lineup, measure, uncovered)
+    meta["aps_note"] = ""
+    for i, m in meta.iterrows():                                  # does any comparison date come from the APS history?
+        used = [pd.Timestamp(m[c]).normalize() for c in ("wk_date", "mo_date", "yr_date") if pd.notna(m[c])]
+        hit = [aps_dates[d] for d in used if d in aps_dates and m["region"] in ("US Gulf", "PNW")]
+        if hit:
+            h = hit[0]
+            f = (h.scale_vessels_pnw, h.scale_kmt_pnw) if m["region"] == "PNW" else (h.scale_vessels_usg, h.scale_kmt_usg)
+            meta.at[i, "aps_note"] = (f"{AREA_SHORT.get(m['region'], m['region'])}: a comparison date before Southport coverage comes from "
+                                      f"APS line-ups, scaled to Southport's basis (APS lists {f[0]:.2f}x the vessels and {f[1]:.2f}x the "
+                                      f"tonnage on {h.overlap_dates} overlapping days)")
     detail = _tidy(detail.assign(destination=""))
     gaps = pd.concat([pd.DataFrame({"source": src, "report_date": sorted(ch.gap_dates(g))})
                       for src, g in lineup.groupby("source")], ignore_index=True)
@@ -321,7 +341,7 @@ def _vetting_panel(facts_db, mtime, meta):
 def _asof_caption(meta, sources=None, left_out=None):
     m = meta if sources is None else meta[meta["source"].isin(sources)]
     bits = [f"{SRC_LABEL.get(src, src)} {pd.Timestamp(r['as_of']):%b %d}" for src, r in m.groupby("source").agg(as_of=("as_of", "max")).iterrows()]
-    notes = [n for n in m["note"].unique() if n]
+    notes = [n for n in m["note"].unique() if n] + ([n for n in m["aps_note"].unique() if n] if "aps_note" in m else [])
     extra = ""
     if left_out:
         shown = {k: v for k, v in left_out.items() if (sources is None or COUNTRIES[k] in sources) and v >= 0.5}

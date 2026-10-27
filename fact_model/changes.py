@@ -27,10 +27,11 @@ def _nearest(dates, target, tol_days):
     return d if abs((d - target).days) <= tol_days else None
 
 
-def lineup_detail(lineup, measure="vessels"):
+def lineup_detail(lineup, measure="vessels", uncovered=None):
     """Finest-grain table: source, region, port, elevator, commodity with `now` and the value a week / month / year
     earlier (NaN where there is no usable snapshot). Also returns per-region metadata (as_of, baseline dates,
-    note). Sum these columns up to any level with rollup()."""
+    note). Sum these columns up to any level with rollup(). `uncovered` = {(source, region, date)} snapshot dates on which a region
+    was simply not reported (e.g. Texas on an APS-only history date): those dates are not treated as 'region was empty'."""
     lineup = lineup.assign(report_date=pd.to_datetime(lineup["report_date"]))
     if "elevator" not in lineup:
         lineup = lineup.assign(elevator="")
@@ -43,10 +44,14 @@ def lineup_detail(lineup, measure="vessels"):
         agg = g.groupby(["report_date", "region", "port", "elevator", "commodity"])[measure].sum()
         for region in g["region"].unique():
             t = lambda d: float(tot.get((region, d), 0.0))
-            good = [d for d in dates if t(d) > 0]
+            rdates = [d for d in dates if (src, region, d) not in (uncovered or ())]
+            if not rdates:
+                continue
+            newest = rdates[-1]
+            good = [d for d in rdates if t(d) > 0]
             typical = float(np.median([t(d) for d in good[-20:]])) if good else 0.0
             gap_prone = typical >= MIN_NORMAL_VESSELS
-            usable = good if gap_prone else dates
+            usable = good if gap_prone else rdates
             as_of, note = newest, ""
             if gap_prone and t(newest) == 0:
                 as_of = good[-1]
