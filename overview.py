@@ -32,9 +32,9 @@ from fact_model import store
 INK, MUTED, BORDER, SURFACE = "#32373c", "#5f7267", "#d7e2dc", "#ffffff"
 GREEN, RED = "#16a34a", "#dc2626"
 
-COMMODITIES = ["Corn", "Soybeans", "Wheat", "Sorghum", "Soybean Meal", "Soybean Oil"]
+COMMODITIES = ["Corn", "Soybeans", "Wheat", "Sorghum", "Soybean Meal", "Soybean Oil", "Sugar"]      # Sugar only exists for Brazil
 COMM_COLORS = {"Corn": "#e0a526", "Soybeans": "#3e8e5a", "Wheat": "#c98b3c", "Sorghum": "#b5543c",
-               "Soybean Meal": "#1f5f46", "Soybean Oil": "#2f7fa8", "Total": INK}
+               "Soybean Meal": "#1f5f46", "Soybean Oil": "#2f7fa8", "Sugar": "#d96c8a", "Total": INK}
 SRC_LABEL = {"US": "United States", "Brazil": "Brazil", "Argentina": "Argentina"}
 COUNTRIES = {v: k for k, v in SRC_LABEL.items()}               # label -> source
 AREA_SHORT = {"US Gulf": "USG", "Texas Gulf": "TXG", "PNW": "PNW"}
@@ -124,9 +124,9 @@ def _vetting(facts_db, mtime=None):
 
 @st.cache_data(show_spinner=False, max_entries=6)
 def _prepare(facts_db, mtime, measure, split=True, fill=True):
-    """Line-up, events and the week/month/year detail for the six commodities. The change baselines are worked out
+    """Line-up, events and the week/month/year detail for the tracked commodities (the six grains and products, plus Brazilian sugar). The change baselines are worked out
     on the WHOLE line-up first (so a region whose newest file came through empty is recognised as a data gap) and
-    only then cut down to the six commodities. With `split`, combo boats are divided across the commodities they carry
+    only then cut down to the tracked commodities. With `split`, combo boats are divided across the commodities they carry
     (their own USDA-measured split when known, else the learned average for their combo type; see combo_calibration) -
     tonnage and vessel counts both, totals conserved. Returns (lineup, events, detail, meta, gaps, left_out)."""
     lineup, events = _load(facts_db, mtime)
@@ -236,7 +236,7 @@ def _split_toggle(key):
     fill = st.checkbox("Fill undisclosed sailings", value=True, key=f"{key}_fill",
                        help="Southport lists some sailed boats as RVT (cargo not disclosed). USDA inspects every export vessel by "
                             "name, so their commodity, tonnage and destination are read from USDA. Off = they stay out of the "
-                            "six commodities.")
+                            "tracked commodities.")
     return split, fill
 
 
@@ -635,7 +635,7 @@ def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
     with c3:
         area = st.pills("Area", areas, selection_mode="multi", default=areas, key=f"ex_area_{'-'.join(srcs)}") or areas
     with c4:
-        comm = st.multiselect("Commodity", COMMODITIES, key="ex_comm", placeholder="All six commodities")
+        comm = st.multiselect("Commodity", COMMODITIES, key="ex_comm", placeholder="All commodities")
     ports = sorted(base[base["area"].isin(area)]["port"].unique())
     with st.expander("Narrow to a port or elevator (optional)"):
         k1, k2 = st.columns(2)
@@ -742,7 +742,9 @@ def page_country(country, facts_db):
             st.markdown(f"**{AREA_SHORT.get(regions[0], regions[0])}**")
             area = regions
     with c_comm:
-        comms = st.multiselect("Commodity", COMMODITIES, default=COMMODITIES, key=f"{key}_comm") or COMMODITIES
+        present = set(d_src["commodity"]) | set(events.loc[events["source"] == source, "commodity"])
+        options = [c for c in COMMODITIES if c in present] or COMMODITIES
+        comms = st.multiselect("Commodity", options, default=options, key=f"{key}_comm") or options
     sel = {"source": [source], "region": area, "commodity": comms}
     st.markdown("#### Line-up")
     lineup_view(sel, lineup, detail, meta, gaps, left_out, measure, key, port_matrix=True)

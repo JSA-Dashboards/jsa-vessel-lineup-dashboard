@@ -20,8 +20,8 @@ def lineup(date, rows, source="US", region="US Gulf"):
                           "commodity": c, "vessels": v, "kmt": v * 50.0} for p, e, c, v in rows])
 
 
-def test_scope_is_the_six_commodities_in_the_requested_order():
-    assert ov.COMMODITIES == ["Corn", "Soybeans", "Wheat", "Sorghum", "Soybean Meal", "Soybean Oil"]
+def test_scope_is_the_six_commodities_in_the_requested_order_plus_brazilian_sugar():
+    assert ov.COMMODITIES == ["Corn", "Soybeans", "Wheat", "Sorghum", "Soybean Meal", "Soybean Oil", "Sugar"]
 
 
 def test_change_table_has_a_total_row_and_drops_all_zero_rows():
