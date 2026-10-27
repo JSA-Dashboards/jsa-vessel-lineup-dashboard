@@ -191,7 +191,7 @@ def scale_snapshot(snap, scales):
     return out
 
 
-def backfill(folder, facts_db=None, since="2023-09-01", skip_within_days=1, cfg=None, dry_run=False):
+def backfill(folder, facts_db=None, since="2023-09-01", skip_within_days=2, cfg=None, dry_run=False):
     """Load APS line-up history into facts.db for every date Southport does not cover (no Southport snapshot within
     `skip_within_days`), scaled to the Southport basis, and record which dates came from APS in the `lineup_provenance` table.
     Idempotent. -> summary dict."""
