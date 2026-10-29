@@ -85,6 +85,7 @@ async function chartBlob(gd) {
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
     clone.setAttribute('width', r.width); clone.setAttribute('height', r.height);
+    clone.style.fontFamily = getComputedStyle(svg).fontFamily;  // the text inherits the page's font; an SVG drawn as an image cannot
     const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
     ctx.drawImage(img, (r.left - rect.left) * scale, (r.top - rect.top) * scale, r.width * scale, r.height * scale);
