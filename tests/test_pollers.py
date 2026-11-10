@@ -43,3 +43,45 @@ def test_finds_a_southport_file_deep_in_the_inbox_oldest_first(fake_graph):
 
 def test_skips_already_processed_messages(fake_graph):
     assert sp.find_new_southport_emails("t", "u", {"m200"}) == []
+
+
+# ── a failed push must not leave the repo mid-rebase ─────────────────────────
+
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True).stdout
+
+
+@pytest.fixture
+def conflicting_clones(tmp_path, monkeypatch):
+    """The droplet's clone and a second clone that pushed a different facts.db first (a binary conflict)."""
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "master", str(remote))
+    clones = {}
+    for name in ("droplet", "other"):
+        d = tmp_path / name
+        _git(tmp_path, "clone", "-q", str(remote), str(d))
+        _git(d, "config", "user.name", "t")
+        _git(d, "config", "user.email", "t@t")
+        clones[name] = d
+    (clones["droplet"] / "facts.db").write_bytes(b"base")
+    _git(clones["droplet"], "add", "facts.db")
+    _git(clones["droplet"], "commit", "-q", "-m", "base")
+    _git(clones["droplet"], "push", "-q", "origin", "master")
+    _git(clones["other"], "pull", "-q")
+    (clones["other"] / "facts.db").write_bytes(b"other side")
+    _git(clones["other"], "commit", "-q", "-am", "other")
+    _git(clones["other"], "push", "-q")
+    (clones["droplet"] / "facts.db").write_bytes(b"droplet side")
+    (clones["droplet"] / "Vessel Lineup - US.xlsx").write_bytes(b"x")
+    monkeypatch.setattr(sp, "REPO_DIR", clones["droplet"])
+    monkeypatch.setattr(sp, "FACTS_DB", clones["droplet"] / "facts.db")
+    return clones["droplet"]
+
+
+def test_a_conflicting_push_aborts_the_rebase_instead_of_leaving_a_detached_head(conflicting_clones):
+    d = conflicting_clones
+    with pytest.raises(RuntimeError, match="pull --rebase failed"):
+        sp.git_push("test")
+    assert _git(d, "rev-parse", "--abbrev-ref", "HEAD").strip() == "master"            # not "HEAD" (detached)
+    assert not (d / ".git" / "rebase-merge").exists() and not (d / ".git" / "rebase-apply").exists()

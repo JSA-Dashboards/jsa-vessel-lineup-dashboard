@@ -93,7 +93,9 @@ def git_push(label):
         if attempt == 0 and ("fetch first" in r.stderr or "rejected" in r.stderr):
             rb = subprocess.run(["git", "-C", repo, "pull", "--rebase", "--autostash"], capture_output=True, text=True)
             if rb.returncode != 0:
-                raise RuntimeError("pull --rebase failed: " + rb.stderr)
+                # binary facts.db can't be merged; back out so the repo is not left on a detached HEAD (see southport_poller)
+                subprocess.run(["git", "-C", repo, "rebase", "--abort"], capture_output=True, text=True)
+                raise RuntimeError("pull --rebase failed (rebase aborted): " + rb.stderr)
             continue
         raise RuntimeError("git push failed: " + (r.stderr or r.stdout))
 

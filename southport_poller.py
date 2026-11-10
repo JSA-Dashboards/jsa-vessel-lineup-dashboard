@@ -263,7 +263,10 @@ def git_push(subject):
                 capture_output=True, text=True,
             )
             if rb.returncode != 0:
-                log.error("Pull --rebase failed: %s", rb.stderr)
+                # facts.db is binary: a conflict can't be merged, and a half-done rebase leaves the repo on a detached
+                # HEAD where every later push fails (10-27..11-10). Back out so the next run starts from `master`.
+                subprocess.run(["git", "-C", str(REPO_DIR), "rebase", "--abort"], capture_output=True, text=True)
+                log.error("Pull --rebase failed (rebase aborted): %s", rb.stderr)
                 raise RuntimeError("git pull --rebase failed")
             continue
         log.error("Git push failed: %s", r.stderr or r.stdout)

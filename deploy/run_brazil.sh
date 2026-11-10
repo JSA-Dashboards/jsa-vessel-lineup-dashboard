@@ -36,12 +36,16 @@ rc=0
             else
                 git commit -m "Brazil lineup + facts: $(date +%Y-%m-%d)" \
                     --author "Droplet Cron <275148418+koltenpostin93-blip@users.noreply.github.com>"
+                pushed=
                 for attempt in 1 2; do
-                    git push && break
-                    [ $attempt -eq 1 ] && git pull --rebase
+                    git push && { pushed=1; break; }
+                    # facts.db is binary: a rebase conflict can't be merged, and a half-done rebase leaves a detached HEAD
+                    # where every later push fails. Back out so the next run starts from master.
+                    [ $attempt -eq 1 ] && { git pull --rebase || git rebase --abort; }
                 done
+                [ -n "$pushed" ] || { echo "PUSH FAILED: committed on the droplet but not on GitHub"; exit 4; }
             fi
-        ) 8>"$LOG_DIR/.facts.lock"
+        ) 8>"$LOG_DIR/.facts.lock" || rc=4          # 4 = push failed -> cron-alert emails
     fi
 } >>"$LOG" 2>&1
 

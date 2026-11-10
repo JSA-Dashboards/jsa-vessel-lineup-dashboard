@@ -143,7 +143,8 @@ def git_push(message):
                 capture_output=True, text=True,
             )
             if rb.returncode != 0:
-                print(f"Pull --rebase failed:\n{rb.stderr}")
+                subprocess.run(["git", "-C", REPO_DIR, "rebase", "--abort"], capture_output=True, text=True)
+                print(f"Pull --rebase failed (rebase aborted):\n{rb.stderr}")
                 if interactive:
                     input("\nPress Enter to exit.")
                 sys.exit(1)

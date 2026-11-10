@@ -26,15 +26,20 @@ rc=0
         else
             git commit -m "Combo shares: $(date +%Y-%m-%d)" \
                 --author "Droplet Cron <275148418+koltenpostin93-blip@users.noreply.github.com>"
+            pushed=
             for attempt in 1 2; do
-                git push && break
-                [ $attempt -eq 1 ] && git pull --rebase
+                git push && { pushed=1; break; }
+                # facts.db is binary: a rebase conflict can't be merged, and a half-done rebase leaves a detached HEAD
+                # where every later push fails. Back out so the next run starts from master.
+                [ $attempt -eq 1 ] && { git pull --rebase || git rebase --abort; }
             done
+            [ -n "$pushed" ] || echo "PUSH FAILED: committed on the droplet but not on GitHub"
         fi
         exit $rc
     ) 8>"$LOG_DIR/.facts.lock"
     echo "=== combo shares finished $(date -Is) rc=$? ==="
 } >>"$LOG" 2>&1
 rc=$(grep -o 'refresh rc=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)
+grep -q 'PUSH FAILED' "$LOG" && rc=4          # 4 = push failed -> cron-alert emails
 find "$LOG_DIR" -name 'combo_shares_*.log' -mtime +30 -delete 2>/dev/null || true
 exit "${rc:-1}"
