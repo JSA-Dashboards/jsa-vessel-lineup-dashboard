@@ -304,8 +304,9 @@ def _slug(text, limit=70):
 
 def _table_title(key):
     """A table's title from its key (the page's headings are separate elements, so the table itself carries none)."""
-    if key in _TITLES:
-        return _TITLES[key]
+    for k in [key] + [key.split("_", i)[-1] for i in range(1, key.count("_") + 1)]:       # a page may prefix its keys (River FOB: rfv_snap_now)
+        if k in _TITLES:
+            return _TITLES[k]
     for prefix, text in _PREFIX:
         if key.startswith(prefix):
             return text + key[len(prefix):]

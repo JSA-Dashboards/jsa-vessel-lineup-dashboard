@@ -38,6 +38,7 @@ COMM_COLORS = {"Corn": "#e0a526", "Soybeans": "#3e8e5a", "Wheat": "#c98b3c", "So
 SRC_LABEL = {"US": "United States", "Brazil": "Brazil", "Argentina": "Argentina"}
 COUNTRIES = {v: k for k, v in SRC_LABEL.items()}               # label -> source
 AREA_SHORT = {"US Gulf": "USG", "Texas Gulf": "TXG", "PNW": "PNW"}
+AREA_NAME = {v: k for k, v in AREA_SHORT.items()}            # USG -> US Gulf
 MEASURES = {"Vessels": "vessels", "Volume (kMT)": "kmt"}
 DEST_FIX = {"Un Kingdom": "United Kingdom", "Un Arab Em": "United Arab Emirates", "Un Arab Emirates": "United Arab Emirates"}
 UNK = {"UNKNOWN", "C/P", "?", "", "RVT", "NOT AVAILABLE", "NAN", "NONE", "WHT", "CORN", "SBM", "YSB", "SORGHUM", "RICE"}   # codes the reports sometimes put in the destination column
@@ -222,6 +223,47 @@ def _unit(measure):
     return "vessels" if measure == "vessels" else "kMT"
 
 
+def _vol(measure):
+    """'vessels' / 'volume (kMT)': the unit as it reads in a title."""
+    return "vessels" if measure == "vessels" else "volume (kMT)"
+
+
+def scope_label(sel, frame=None):
+    """Where a table or chart is looking, for its title: 'Brazil · North Arc, South/SE · Corn'. A dimension that is not narrowed (nothing
+    chosen, or every value of `frame` chosen) is left out; with nothing narrowed it reads 'all countries'. `frame` is the unfiltered detail
+    or events frame the selection is applied to."""
+    def pick(col, vals, pool):
+        if not vals:
+            return []
+        vals = [v for v in vals if v == v]
+        if pool is not None and col in pool and set(pool[col].dropna().unique()) <= set(vals):
+            return []
+        return vals
+
+    def names(col, vals):
+        if col == "source":
+            vals = [SRC_LABEL.get(v, v) for v in vals]
+        elif col == "area":
+            vals = [AREA_NAME.get(v, v) for v in vals]
+        return vals if len(vals) <= 3 else vals[:3] + [f"+{len(vals) - 3} more"]
+
+    src = pick("source", sel.get("source"), frame)
+    inside = frame[frame["source"].isin(sel["source"])] if frame is not None and "source" in frame and sel.get("source") else frame
+    bits = [names("source", src)] if src else []
+    for col in ("area", "region", "port", "elevator", "commodity"):
+        v = pick(col, sel.get(col), inside)
+        if v:
+            bits.append(names(col, v))
+    if not bits:
+        bits.append(["all countries"])
+    return " · ".join(", ".join(b) for b in bits)
+
+
+def _scope_name(name):
+    """A SCOPES / FOCUS entry as it reads in a title: USG -> US Gulf, Total -> all countries."""
+    return "all countries" if name == "Total" else AREA_NAME.get(name, SRC_LABEL.get(name, name))
+
+
 def _measure_toggle(key):
     label = st.segmented_control("Show", list(MEASURES), default="Vessels", key=f"{key}_measure", selection_mode="single")
     return MEASURES[label or "Vessels"]
@@ -380,13 +422,13 @@ def change_table(detail, by, label):
     return out
 
 
-def show_change_table(detail, by, label, key):
+def show_change_table(detail, by, label, key, title=None):
     if detail.empty:
         st.info("Nothing in the line-up for this selection.")
         return
     t = change_table(detail, by, label)
     d_cols = [c for c in t.columns if c.startswith(("Δ", "%"))]
-    copy_tools.table(t, key, styler=_styled(t, d_cols, label), height=min(38 * (len(t) + 1), 560))
+    copy_tools.table(t, key, styler=_styled(t, d_cols, label), height=min(38 * (len(t) + 1), 560), title=title)
 
 
 def port_table(detail):
@@ -410,17 +452,17 @@ def port_table(detail):
     return disp.rename(columns={"region": "Area", "port": "Port"})
 
 
-def show_port_table(detail, key):
+def show_port_table(detail, key, title=None):
     if detail.empty:
         st.info("Nothing in the line-up for this selection.")
         return
     t = port_table(detail)
-    copy_tools.table(t, key, styler=_styled(t, ["Δ Week", "Δ Month", "Δ Year"]), height=min(38 * (len(t) + 1), 640))
+    copy_tools.table(t, key, styler=_styled(t, ["Δ Week", "Δ Month", "Δ Year"]), height=min(38 * (len(t) + 1), 640), title=title)
 
 
 # ── charts ───────────────────────────────────────────────────────────────────
 
-def _trend(lineup, gaps, measure, key):
+def _trend(lineup, gaps, measure, key, where=""):
     rng = st.segmented_control("Range", ["3M", "6M", "1Y", "All"], default="1Y", key=f"{key}_trange")
     d = lineup.merge(gaps.assign(_gap=1), on=["source", "report_date"], how="left")
     d = d[d["_gap"].isna()]
@@ -432,7 +474,7 @@ def _trend(lineup, gaps, measure, key):
         return
     fig = px.area(g, x="report_date", y=measure, color="commodity", color_discrete_map=COMM_COLORS,
                   category_orders={"commodity": _comm_sort(g["commodity"].unique())}, labels={measure: _unit(measure), "report_date": ""})
-    copy_tools.chart(_layout(fig, 320, f"Line-up over time ({_unit(measure)})"), f"{key}_trend")
+    copy_tools.chart(_layout(fig, 320, f"Line-up over time ({_unit(measure)})" + (f": {where}" if where else "")), f"{key}_trend")
     if g["report_date"].nunique() < 3:
         st.caption("Only a few snapshots are banked for this selection so far; the trend fills in as new line-ups arrive.")
 
@@ -473,15 +515,16 @@ def lineup_view(sel, lineup, detail, meta, gaps, left_out, measure, key, group_b
     if new:
         st.caption(f"{', '.join(SRC_LABEL[s] for s in new)}: daily line-up began Oct 22, 2026, so its week / month / year "
                    "comparisons fill in as it accumulates (it is in the totals, not in the changes).")
-    show_change_table(d, GROUPS[group_by], group_by, f"{key}_ct")
+    where = scope_label(sel, detail)
+    show_change_table(d, GROUPS[group_by], group_by, f"{key}_ct", title=f"Line-up {_vol(measure)} by {group_by.lower()}: {where}")
     ln = _apply(lineup, sel)
-    _trend(ln, gaps, measure, key)
+    _trend(ln, gaps, measure, key, where)
     if port_matrix:
         st.markdown("**By port**")
-        show_port_table(d, f"{key}_ports")
+        show_port_table(d, f"{key}_ports", title=f"Line-up {_vol(measure)} by port and commodity: {where}")
     st.markdown("**Where the line-up is headed**")
     cur = ch.current_rows(ln, meta)
-    _destinations(cur, measure, measure, f"Line-up destinations ({_unit(measure)})", f"{key}_ldest")
+    _destinations(cur, measure, measure, f"Line-up destinations ({_unit(measure)}): {where}", f"{key}_ldest")
 
 
 # ── SAILED view ──────────────────────────────────────────────────────────────
@@ -505,7 +548,7 @@ def _sailed_table(w, label, by):
         "Year-to-date": t["ytd"].map(_num), "Δ YTD vs last year": t["d_ytd"].map(_delta), "% YTD": pc(t["d_ytd"], t["ytd_ly"]).map(_pct)})
 
 
-def _timeline(ev, key):
+def _timeline(ev, key, where=""):
     win = st.segmented_control("Timeline window", ["14 days", "30 days", "60 days", "90 days", "6 months", "1 year"],
                                default="30 days", key=f"{key}_twin")
     days = {"14 days": 14, "30 days": 30, "60 days": 60, "90 days": 90, "6 months": 183, "1 year": 365}[win or "30 days"]
@@ -521,7 +564,8 @@ def _timeline(ev, key):
                      category_orders={"port": order[::-1], "commodity": _comm_sort(r["commodity"].unique())}, size_max=18,
                      hover_data={"vessel": True, "destination": True, "kmt": ":,.1f", "size": False, "sail_date": "|%b %d, %Y"},
                      labels={"sail_date": "", "port": "", "kmt": "kMT"})
-    copy_tools.chart(_layout(fig, 140 + 24 * len(order), f"Sailings, last {win or '30 days'} (bubble = kMT)", unified=False), f"{key}_timeline")
+    copy_tools.chart(_layout(fig, 140 + 24 * len(order), f"Sailings, last {win or '30 days'} (bubble = kMT)" + (f": {where}" if where else ""), unified=False),
+                     f"{key}_timeline")
     return r, days
 
 
@@ -536,9 +580,10 @@ def sailed_view(sel, events, measure, months, key, group_by="Commodity"):
     st.caption(f"Sailings through {asof:%b %d, %Y}. Week = last 7 days vs the 7 before; month and year compare month-to-date with the "
                "same days of last month and of last year.")
     by = GROUPS[group_by]
+    where = scope_label(sel, events)
     t = _sailed_table(ch.sailed_windows(ev, [by], measure), group_by, by)
     copy_tools.table(t, f"{key}_sailed", styler=_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], group_by),
-                     height=min(38 * (len(t) + 1), 560))
+                     height=min(38 * (len(t) + 1), 560), title=f"Shipped {_vol(measure)} by {group_by.lower()}: {where}")
     if "Argentina" in srcs:
         st.caption("Argentina's sailed history starts Oct 1, 2026 (the first Nabsa report), so its last-month and last-year "
                    "comparisons are n/a for now.")
@@ -553,20 +598,20 @@ def sailed_view(sel, events, measure, months, key, group_by="Commodity"):
                      category_orders={"commodity": _comm_sort(mm["commodity"].unique())}, labels={"_m": _unit(measure), "month": ""})
         fig.update_xaxes(tickformat="%b %Y")
         fig.update_traces(marker_line_width=0)
-        copy_tools.chart(_layout(fig, 340, f"Shipped {_unit(measure)} by month and commodity"), f"{key}_monthly")
+        copy_tools.chart(_layout(fig, 340, f"Shipped {_unit(measure)} by month and commodity: {where}"), f"{key}_monthly")
         piv = mm.pivot_table(index="commodity", columns="month", values="_m", aggfunc="sum", fill_value=0.0)
         piv = piv.loc[_comm_sort(piv.index)]
         piv.columns = [c.strftime("%b %Y") for c in piv.columns]
         piv["Total"] = piv.sum(axis=1)
         piv.loc["Total"] = piv.sum()
         copy_tools.table(piv.map(lambda v: "" if v == 0 else _num(v)), f"{key}_pivot", height=min(38 * (len(piv) + 1), 360),
-                         hide_index=False)
+                         hide_index=False, title=f"Shipped {_vol(measure)} by month and commodity: {where}")
     st.markdown("**Sailing timeline**")
-    recent, days = _timeline(ev, key)
+    recent, days = _timeline(ev, key, where)
     st.markdown("**Where recent sailings went**")
     if not recent.empty:
         r = recent.assign(_v=recent["vessel_w"] if measure == "vessels" else recent["kmt"].fillna(0.0))
-        _destinations(r, "_v", measure, f"Destinations of sailings, last {days} days ({_unit(measure)})", f"{key}_sdest")
+        _destinations(r, "_v", measure, f"Destinations of sailings, last {days} days ({_unit(measure)}): {where}", f"{key}_sdest")
 
 
 # ── PAGE: summary ────────────────────────────────────────────────────────────
@@ -605,16 +650,18 @@ def _snapshot_matrices(detail, events, measure):
     for title, cols in ((f"Line-up now ({unit})", now), (f"Sailed month-to-date ({unit})", mtd)):
         st.markdown(f"**{title}**")
         t = render(cols)
-        copy_tools.table(t, "snap_now" if title.startswith("Line-up") else "snap_mtd", styler=_styled(t, [], "Commodity"),
-                         height=38 * (len(t) + 1))
+        shipped = title.startswith("Sailed")
+        copy_tools.table(t, "snap_mtd" if shipped else "snap_now", styler=_styled(t, [], "Commodity"), height=38 * (len(t) + 1),
+                         title=(f"Shipped {_vol(measure)} by commodity, month-to-date" if shipped else f"Line-up {_vol(measure)} by commodity")
+                         + ": US areas, Brazil and Argentina")
 
 
-def _area_table(detail, source):
+def _area_table(detail, source, measure):
     """Areas of one country as rows: line-up now and the week / month / year change."""
     d = detail[detail["source"] == source]
     if d["area"].nunique() < 2:
         return
-    show_change_table(d, "area", "Area", f"sum_area_{source}")
+    show_change_table(d, "area", "Area", f"sum_area_{source}", title=f"Line-up {_vol(measure)} by area: {SRC_LABEL.get(source, source)}")
 
 
 def _explorer(lineup, events, detail, meta, gaps, left_out, measure):
@@ -703,15 +750,16 @@ def page_summary(facts_db):
         with st.expander(name + (" (sailed only)" if d.empty else ""), expanded=name == "Total"):
             if not d.empty:
                 st.markdown("**Line-up**")
-                show_change_table(d, "commodity", "Commodity", f"sum_ct_{name}")
+                show_change_table(d, "commodity", "Commodity", f"sum_ct_{name}",
+                                  title=f"Line-up {_vol(measure)} by commodity: {_scope_name(name)}")
             if name in ("United States", "Brazil", "Argentina"):
                 st.markdown("**Line-up by area**")
-                _area_table(detail, sel["source"][0])
+                _area_table(detail, sel["source"][0], measure)
             if not ev.empty:
                 st.markdown("**Sailed**")
                 t = _sailed_table(ch.sailed_windows(ev, ["commodity"], measure), "Commodity", "commodity")
                 copy_tools.table(t, f"sum_sailed_{name}", styler=_styled(t, [c for c in t.columns if c.startswith(("Δ", "%"))], "Commodity"),
-                                 height=min(38 * (len(t) + 1), 400))
+                                 height=min(38 * (len(t) + 1), 400), title=f"Shipped {_vol(measure)} by commodity: {_scope_name(name)}")
 
     st.markdown("---")
     _explorer(lineup, events, detail, meta, gaps, left_out, measure)
