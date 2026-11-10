@@ -1,0 +1,4 @@
+# Heartbeat on the vessel line-up data - weekdays 11:15 (system time is America/Chicago; Southport lands ~9:00, Nabsa after noon).
+# Emails (via cron-alert) when GitHub's facts.db is stale, the droplet has data it has not pushed, or its clone is mid-rebase.
+# Install: sudo cp deploy/data-age.cron /etc/cron.d/data-age && sudo chmod +x deploy/run_data_age_check.sh
+15 11 * * 1-5 root /opt/alerting/cron-alert "Vessel lineup data age" "/opt/vessel-lineup-dashboard/logs/data_age_*.log" /opt/vessel-lineup-dashboard/deploy/run_data_age_check.sh
