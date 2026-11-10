@@ -23,3 +23,4 @@ history/
 brazil_poller.log
 brazil_poller_state.json
 .pytest_cache/
+.env.weekly
