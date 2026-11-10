@@ -1,0 +1,4 @@
+# Weekly vessel line-up email - Wednesdays 16:00 (system time is America/Chicago). To = VESSEL_EMAIL_TO (default kpostin@jpsi.com), BCC = VESSEL_EMAIL_BCC;
+# set them in /opt/vessel-lineup-dashboard/.env.weekly (sourced below) or leave unset for Kolten only. Wrapped in cron-alert so a failed send emails you.
+# Install: sudo cp deploy/weekly-email.cron /etc/cron.d/weekly-email && sudo chmod +x deploy/run_weekly_email.sh
+0 16 * * 3 root /opt/alerting/cron-alert "Vessel lineup weekly email" "/opt/vessel-lineup-dashboard/logs/weekly_email_*.log" /opt/vessel-lineup-dashboard/deploy/run_weekly_email.sh

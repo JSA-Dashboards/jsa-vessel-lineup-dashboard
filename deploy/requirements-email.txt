@@ -1,0 +1,5 @@
+# extra packages the weekly email needs on the droplet (weekly_email.py imports the dashboard's overview.py for its numbers):
+#   /opt/vessel-lineup-dashboard/.venv/bin/pip install -r deploy/requirements-email.txt
+streamlit>=1.51
+plotly
+matplotlib
