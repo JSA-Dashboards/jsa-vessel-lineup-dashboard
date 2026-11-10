@@ -107,13 +107,14 @@ def test_a_failed_send_raises(monkeypatch, tmp_path):
 def test_the_live_send_goes_out_once_per_week_and_a_test_copy_does_not_count(monkeypatch, tmp_path):
     monkeypatch.setattr(we, "STATE", tmp_path / "state.json")
     calls = []
-    monkeypatch.setattr(we, "build", lambda db, today: ("s", "<html>", {}))
+    monkeypatch.setattr(we, "build", lambda db, today, signature=None: ("s", "<html>", {}))
+    monkeypatch.setattr(we, "load_signature", lambda folder=None: ("<sig>", {}))
     monkeypatch.setattr(we, "send_via_graph", lambda subject, html, images, to, bcc=(): calls.append((to, list(bcc))) or "basis-tracker@jpsi.com")
     monkeypatch.delenv("VESSEL_EMAIL_TO", raising=False)
-    monkeypatch.setenv("VESSEL_EMAIL_BCC", "a@jpsi.com; b@jpsi.com")
+    monkeypatch.setenv("VESSEL_EMAIL_BCC", "jsagroup@jpsi.com,CIF@jpsi.com")
     assert we.main(["--to", "kpostin@jpsi.com"]) == 0 and not (tmp_path / "state.json").exists()      # a test copy leaves no mark
     assert we.main(["--send"]) == 0
-    assert calls[-1] == (["kpostin@jpsi.com"], ["a@jpsi.com", "b@jpsi.com"])
+    assert calls[-1] == (["kpostin@jpsi.com"], ["jsagroup@jpsi.com", "CIF@jpsi.com"])          # Kolten on To, the list on BCC
     assert json.loads((tmp_path / "state.json").read_text())["week"] == we.week_key(dt.date.today())
     n = len(calls)
     assert we.main(["--send"]) == 0 and len(calls) == n                                               # the cron's second run does nothing
@@ -121,8 +122,51 @@ def test_the_live_send_goes_out_once_per_week_and_a_test_copy_does_not_count(mon
 
 
 def test_a_preview_writes_the_page_and_the_pngs_and_sends_nothing(monkeypatch, tmp_path):
-    monkeypatch.setattr(we, "build", lambda db, today: ("s", '<img src="cid:x_y">', {"x_y": PNG}))
+    monkeypatch.setattr(we, "build", lambda db, today, signature=None: ("s", '<img src="cid:x_y">', {"x_y": PNG}))
+    monkeypatch.setattr(we, "SIGNATURE_DIR", tmp_path / "no_signature_here")                  # a preview does not need it
     monkeypatch.setattr(we, "send_via_graph", lambda *a, **k: pytest.fail("must not send"))
     assert we.main(["--preview", str(tmp_path / "out")]) == 0
     assert (tmp_path / "out" / "x_y.png").read_bytes() == PNG
     assert 'src="x_y.png"' in (tmp_path / "out" / "email.html").read_text(encoding="utf-8")
+
+
+def _sig(tmp_path, html='<p>Kolten A. Postin</p><p>John Stewart &amp; Associates</p><img src="cid:sig_1">'):
+    d = tmp_path / "sig"
+    d.mkdir()
+    (d / "signature.html").write_text(html, encoding="utf-8")
+    (d / "sig_1.png").write_bytes(PNG)
+    return d
+
+
+def test_the_signature_is_loaded_with_its_pictures_and_goes_last(tmp_path, built):
+    html, images = we.load_signature(_sig(tmp_path))
+    assert images == {"sig_1": PNG}
+    subject, page, imgs = we.build(FACTS, dt.date(2026, 11, 11), (html, images))
+    assert "sig_1" in imgs and page.index("Kolten A. Postin") > page.index("Source: daily port line-up reports")
+    assert 'src="cid:sig_1"' in page
+
+
+def test_no_signature_no_send_but_a_preview_is_fine(monkeypatch, tmp_path):
+    monkeypatch.setattr(we, "SIGNATURE_DIR", tmp_path / "nothing")
+    monkeypatch.setattr(we, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(we, "build", lambda db, today, signature=None: ("s", "<html>", {}))
+    monkeypatch.setattr(we, "send_via_graph", lambda *a, **k: pytest.fail("a send without the signature must not go out"))
+    with pytest.raises(RuntimeError, match="signature is missing"):
+        we.main(["--send"])
+    with pytest.raises(RuntimeError, match="signature is missing"):
+        we.main(["--to", "kpostin@jpsi.com"])
+    assert we.main(["--preview", str(tmp_path / "out")]) == 0
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_something_that_is_not_the_signature_is_refused(tmp_path):
+    with pytest.raises(RuntimeError, match="does not look like the signature"):
+        we.load_signature(_sig(tmp_path, '<p>hello</p>'))
+
+
+def test_replies_go_to_kolten_not_the_basis_tracker_mailbox(monkeypatch, tmp_path):
+    sent = _graph(monkeypatch, tmp_path)
+    we.send_via_graph("s", "h", {}, ["kpostin@jpsi.com"], ["jsagroup@jpsi.com", "CIF@jpsi.com"])
+    m = sent["body"]["message"]
+    assert [r["emailAddress"]["address"] for r in m["replyTo"]] == ["kpostin@jpsi.com"]
+    assert [r["emailAddress"]["address"] for r in m["bccRecipients"]] == ["jsagroup@jpsi.com", "CIF@jpsi.com"]

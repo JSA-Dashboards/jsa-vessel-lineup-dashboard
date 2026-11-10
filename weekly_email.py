@@ -19,6 +19,7 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import sys
 from html import escape
 from pathlib import Path
@@ -39,6 +40,10 @@ from fact_model import changes as ch       # noqa: E402
 
 PORTAL_URL = os.environ.get("VESSEL_PORTAL_URL", "https://jsa-vessel-lineup-dashboard.streamlit.app")
 DEFAULT_TO = "kpostin@jpsi.com"
+REPLY_TO = os.environ.get("VESSEL_EMAIL_REPLY_TO", "kpostin@jpsi.com")          # the mail leaves basis-tracker@, so replies go to Kolten
+# Kolten's Outlook signature (html + sig_N.png). NOT in git (this repo is public and the signature holds his contact links and the firm's
+# disclaimer): it is copied to the droplet by hand, and the River FOB daily email already keeps it in this folder.
+SIGNATURE_DIR = Path(os.environ.get("VESSEL_SIGNATURE_DIR", "/opt/river-fob-portal/email_signature"))
 STATE = HERE / "logs" / ".weekly_email_state.json"
 ENV_FILE = Path(os.environ.get("VESSEL_EMAIL_ENV", "/opt/basis-tracker/.env"))
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -245,8 +250,21 @@ def h2(text, sub=""):
             f'padding-left:10px;">{escape(text)}</div>{s}</div>')
 
 
-def build(facts_db, today=None):
-    """(subject, html, {cid: png bytes}) for the email."""
+def load_signature(folder=None):
+    """(signature html, {cid: png}). Raises when it is missing or incomplete: it carries the firm's disclaimer, so no signature, no email."""
+    folder = Path(folder or SIGNATURE_DIR)
+    try:
+        html = (folder / "signature.html").read_text(encoding="utf-8")
+        images = {cid: (folder / f"{cid}.png").read_bytes() for cid in sorted(set(re.findall(r'src="cid:([^"]+)"', html)))}
+    except OSError as e:
+        raise RuntimeError(f"The email signature is missing or incomplete in {folder}: {e}") from e
+    if "John Stewart" not in html:
+        raise RuntimeError(f"{folder}/signature.html does not look like the signature")
+    return html, images
+
+
+def build(facts_db, today=None, signature=None):
+    """(subject, html, {cid: png bytes}) for the email. `signature` = (html, {cid: png}) from load_signature(), last in the email."""
     today = today or dt.date.today()
     data = load(facts_db)
     images, blocks = {}, []
@@ -285,7 +303,10 @@ def build(facts_db, today=None):
 {"".join(blocks)}
 <div style="font-size:11px;color:{MUTED};margin:28px 0 6px;line-height:1.5;border-top:1px solid {BORDER};padding-top:12px;">{escape(foot)}<br>
 Source: daily port line-up reports (US, Brazil, Argentina) · John Stewart &amp; Associates · jpsi.com</div>
+{('<div style="margin:22px 0 4px;">' + signature[0] + '</div>') if signature else ''}
 </td></tr></table></td></tr></table></body></html>"""
+    if signature:
+        images = {**images, **signature[1]}
     return f"JSA Vessel Line-up · {today:%a %b} {today.day}", html, images
 
 
@@ -316,6 +337,7 @@ def send_via_graph(subject, html, images, to, bcc=()):
         raise RuntimeError("Graph token failed: " + str(tok.get("error_description", tok))[:300])
     rcpt = lambda addrs: [{"emailAddress": {"address": a}} for a in addrs]
     msg = {"subject": subject, "body": {"contentType": "HTML", "content": html}, "toRecipients": rcpt(to), "bccRecipients": rcpt(bcc),
+           "replyTo": rcpt([REPLY_TO]),
            "attachments": [{"@odata.type": "#microsoft.graph.fileAttachment", "name": f"{cid}.png", "contentType": "image/png",
                             "contentBytes": base64.b64encode(png).decode(), "contentId": cid, "isInline": True} for cid, png in images.items()]}
     r = requests.post(f"{GRAPH}/users/{cfg['GRAPH_SENDER']}/sendMail", headers={"Authorization": "Bearer " + tok["access_token"]},
@@ -355,7 +377,13 @@ def main(argv=None):
     if a.send and not a.force and already_sent(today):
         print(f"already sent for {week_key(today)}; nothing to do (--force to resend)")
         return 0
-    subject, html, images = build(a.db, today)
+    try:
+        signature = load_signature()
+    except RuntimeError:
+        if not a.preview:
+            raise                                  # a send without the signature (and its disclaimer) must not go out
+        signature = None
+    subject, html, images = build(a.db, today, signature)
     if a.preview:
         out = Path(a.preview)
         out.mkdir(parents=True, exist_ok=True)
