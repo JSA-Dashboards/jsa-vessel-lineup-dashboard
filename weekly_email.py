@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import time
 from html import escape
 from pathlib import Path
 
@@ -47,6 +48,7 @@ SIGNATURE_DIR = Path(os.environ.get("VESSEL_SIGNATURE_DIR", "/opt/river-fob-port
 STATE = HERE / "logs" / ".weekly_email_state.json"
 ENV_FILE = Path(os.environ.get("VESSEL_EMAIL_ENV", "/opt/basis-tracker/.env"))
 GRAPH = "https://graph.microsoft.com/v1.0"
+RETRIES, RETRY_WAIT = 4, 20                                   # up to 4 tries, 20 s / 40 s / 60 s apart, on a transient Graph error
 
 SCOPES = dict(ov.SCOPES)
 TABLE_AREAS = ["PNW", "USG", "TXG", "Brazil", "Argentina"]               # the line-up tables, in this order
@@ -340,11 +342,15 @@ def send_via_graph(subject, html, images, to, bcc=()):
            "replyTo": rcpt([REPLY_TO]),
            "attachments": [{"@odata.type": "#microsoft.graph.fileAttachment", "name": f"{cid}.png", "contentType": "image/png",
                             "contentBytes": base64.b64encode(png).decode(), "contentId": cid, "isInline": True} for cid, png in images.items()]}
-    r = requests.post(f"{GRAPH}/users/{cfg['GRAPH_SENDER']}/sendMail", headers={"Authorization": "Bearer " + tok["access_token"]},
-                      json={"message": msg, "saveToSentItems": True}, timeout=60)
-    if r.status_code != 202:
-        raise RuntimeError(f"Graph sendMail {r.status_code}: {r.text[:300]}")
-    return cfg["GRAPH_SENDER"]
+    for attempt in range(1, RETRIES + 1):                 # Graph answers a transient 429 / 5xx now and then (a 503 on 11-12): try again, not give up
+        r = requests.post(f"{GRAPH}/users/{cfg['GRAPH_SENDER']}/sendMail", headers={"Authorization": "Bearer " + tok["access_token"]},
+                          json={"message": msg, "saveToSentItems": True}, timeout=60)
+        if r.status_code == 202:
+            return cfg["GRAPH_SENDER"]
+        if r.status_code not in (429, 500, 502, 503, 504) or attempt == RETRIES:
+            break
+        time.sleep(RETRY_WAIT * attempt)
+    raise RuntimeError(f"Graph sendMail {r.status_code}: {r.text[:300]}")
 
 
 def _split(s):

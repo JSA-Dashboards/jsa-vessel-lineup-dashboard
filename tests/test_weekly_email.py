@@ -174,3 +174,30 @@ def test_replies_go_to_kolten_not_the_basis_tracker_mailbox(monkeypatch, tmp_pat
     m = sent["body"]["message"]
     assert [r["emailAddress"]["address"] for r in m["replyTo"]] == ["kpostin@jpsi.com"]
     assert [r["emailAddress"]["address"] for r in m["bccRecipients"]] == ["jsagroup@jpsi.com", "CIF@jpsi.com"]
+
+
+def test_a_transient_graph_error_is_retried_but_a_real_one_is_not(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("GRAPH_TENANT_ID=t\nGRAPH_CLIENT_ID=c\nGRAPH_CLIENT_SECRET=s\nGRAPH_SENDER=basis-tracker@jpsi.com\n")
+    monkeypatch.setattr(we, "ENV_FILE", env)
+    monkeypatch.setattr(we, "RETRY_WAIT", 0)
+    monkeypatch.setitem(sys.modules, "msal", FakeMsal)
+    calls = []
+
+    def post_factory(codes):
+        def post(url, headers, json, timeout):
+            calls.append(1)
+            return types.SimpleNamespace(status_code=codes[min(len(calls) - 1, len(codes) - 1)], text="boom")
+        return types.SimpleNamespace(post=post)
+    monkeypatch.setitem(sys.modules, "requests", post_factory([503, 503, 202]))
+    assert we.send_via_graph("s", "h", {}, ["a@b.c"]) == "basis-tracker@jpsi.com" and len(calls) == 3          # two 503s, then through
+    calls.clear()
+    monkeypatch.setitem(sys.modules, "requests", post_factory([403]))
+    with pytest.raises(RuntimeError, match="403"):
+        we.send_via_graph("s", "h", {}, ["a@b.c"])
+    assert len(calls) == 1                                                                                      # a 403 is not retried
+    calls.clear()
+    monkeypatch.setitem(sys.modules, "requests", post_factory([503]))
+    with pytest.raises(RuntimeError, match="503"):
+        we.send_via_graph("s", "h", {}, ["a@b.c"])
+    assert len(calls) == we.RETRIES                                                                             # gives up after RETRIES
