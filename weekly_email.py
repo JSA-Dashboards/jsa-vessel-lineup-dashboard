@@ -274,13 +274,7 @@ def build(facts_db, today=None, signature=None):
     if stale:
         banner = (f'<div style="background:#fff4e5;border:1px solid #f0c48a;color:#7a4a00;padding:9px 12px;font-size:13px;margin:0 0 14px;">'
                   f'Heads-up: no fresh line-up for {escape(", ".join(stale))}.</div>')
-    blocks.append(h2("Line-up change", "Vessels in the line-up now, and the change vs last week, last month and last year."))
-    blocks.append(trend_table(data["detail_v"], "vessels"))
-    blocks.append('<div style="height:14px;"></div>' + trend_table(data["detail_k"], "kmt"))
-    blocks.append(h2("Line-up by commodity", "Vessels, then volume (kMT)."))
-    blocks.append(commodity_table(data["detail_v"], "vessels"))
-    blocks.append('<div style="height:14px;"></div>' + commodity_table(data["detail_k"], "kmt"))
-    for area in CHART_AREAS:
+    for area in CHART_AREAS:                                  # the charts lead the email, the tables close it
         blocks.append(h2(HEADING[area], "Every port and terminal. Line-up over time (last 12 months) and where the line-up is headed."))
         for c in CHART_COMMS:
             cid = f"{area.lower()}_{c.lower()}"
@@ -288,6 +282,12 @@ def build(facts_db, today=None, signature=None):
             blocks.append(f'<div style="margin:12px 0 4px;font-size:13px;">{stat_line(data, area, c)}</div>'
                           f'<img src="cid:{cid}" alt="{escape(HEADING[area])} {c}: line-up over time and destinations" width="680" '
                           f'style="display:block;width:100%;max-width:680px;height:auto;border:1px solid {BORDER};">')
+    blocks.append(h2("Line-up change", "Vessels in the line-up now, and the change vs last week, last month and last year."))
+    blocks.append(trend_table(data["detail_v"], "vessels"))
+    blocks.append('<div style="height:14px;"></div>' + trend_table(data["detail_k"], "kmt"))
+    blocks.append(h2("Line-up by commodity", "Vessels, then volume (kMT)."))
+    blocks.append(commodity_table(data["detail_v"], "vessels"))
+    blocks.append('<div style="height:14px;"></div>' + commodity_table(data["detail_k"], "kmt"))
     foot = ("Combo (multi-commodity) boats are split using USDA-measured shares, and undisclosed cargoes are filled from USDA vessel "
             "inspections, the same as the portal. Week / month / year changes compare each area's newest line-up with its snapshot "
             "7 days, 1 month and 1 year earlier.")

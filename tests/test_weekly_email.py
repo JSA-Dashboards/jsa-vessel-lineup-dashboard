@@ -29,7 +29,11 @@ def built():
 def test_the_email_has_the_portal_link_first_and_every_section(built):
     subject, html, images = built
     assert subject == "JSA Vessel Line-up · Wed Nov 11"
-    assert html.index(we.PORTAL_URL) < html.index("Line-up change") < html.index("Line-up by commodity")
+    # order: portal link, then the charts (PNW first, Argentina last), then the tables, then the footnote
+    order = [html.index(we.PORTAL_URL), html.index("cid:pnw_corn"), html.index("cid:usg_corn"), html.index("cid:brazil_corn"),
+             html.index("cid:argentina_soybeans"), html.index("Line-up change"), html.index("Line-up by commodity"),
+             html.index("Source: daily port line-up reports")]
+    assert order == sorted(order)
     for name in ("Pacific Northwest (PNW)", "US Gulf (USG)", "Brazil", "Argentina"):
         assert f">{name}<" in html
     for area in ("PNW", "USG", "TXG", "Brazil", "Argentina"):                      # the trend table lists every area
