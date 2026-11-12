@@ -201,3 +201,11 @@ def test_a_transient_graph_error_is_retried_but_a_real_one_is_not(monkeypatch, t
     with pytest.raises(RuntimeError, match="503"):
         we.send_via_graph("s", "h", {}, ["a@b.c"])
     assert len(calls) == we.RETRIES                                                                             # gives up after RETRIES
+
+
+def test_the_cron_sends_at_4_and_retries_at_5_and_6_pm_on_wednesdays():
+    line = next(l for l in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "weekly-email.cron"),
+                                encoding="utf-8").read().splitlines() if l and not l.startswith("#"))
+    minute, hours, dom, month, dow = line.split()[:5]
+    assert (minute, hours, dom, month, dow) == ("0", "16,17,18", "*", "*", "3")           # Wednesday 16:00, then 17:00 and 18:00 as backups
+    assert "run_weekly_email.sh" in line and "cron-alert" in line

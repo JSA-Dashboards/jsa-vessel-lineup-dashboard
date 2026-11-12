@@ -1,4 +1,5 @@
-# Weekly vessel line-up email - Wednesdays 16:00 (system time is America/Chicago). To = VESSEL_EMAIL_TO (default kpostin@jpsi.com), BCC = VESSEL_EMAIL_BCC;
+# Weekly vessel line-up email - Wednesdays 16:00, with backup tries at 17:00 and 18:00 in case Outlook/Graph is down at 4 (system time is America/Chicago).
+# The once-per-ISO-week guard makes the 17:00 and 18:00 runs do nothing when the 16:00 send went out. To = VESSEL_EMAIL_TO (default kpostin@jpsi.com), BCC = VESSEL_EMAIL_BCC;
 # set them in /opt/vessel-lineup-dashboard/.env.weekly (sourced below) or leave unset for Kolten only. Wrapped in cron-alert so a failed send emails you.
 # Install: sudo cp deploy/weekly-email.cron /etc/cron.d/weekly-email && sudo chmod +x deploy/run_weekly_email.sh
-0 16 * * 3 root /opt/alerting/cron-alert "Vessel lineup weekly email" "/opt/vessel-lineup-dashboard/logs/weekly_email_*.log" /opt/vessel-lineup-dashboard/deploy/run_weekly_email.sh
+0 16,17,18 * * 3 root /opt/alerting/cron-alert "Vessel lineup weekly email" "/opt/vessel-lineup-dashboard/logs/weekly_email_*.log" /opt/vessel-lineup-dashboard/deploy/run_weekly_email.sh
