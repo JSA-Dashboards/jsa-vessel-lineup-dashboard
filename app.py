@@ -1236,22 +1236,22 @@ def main():
         st.session_state["cached_mtime"] = file_mtime
 
     facts_db = _data_info["facts.db"]["path"]
-    tabs = st.tabs(["Summary", "United States", "Brazil", "Argentina", "Forecast & execution", "Legacy views"],
-                   on_change="rerun")
+    names = ["United States", "Brazil", "Argentina", "Summary", "Forecast & execution", "Legacy views"]      # the order they sit in
+    tab = dict(zip(names, st.tabs(names, on_change="rerun")))                                                 # looked up by name, never by position
 
-    with tabs[0]:
-        if tabs[0].open:
-            import overview
-            overview.page_summary(facts_db)
-
-    for i, country in ((1, "United States"), (2, "Brazil"), (3, "Argentina")):
-        with tabs[i]:
-            if tabs[i].open:
+    for country in ("United States", "Brazil", "Argentina"):
+        with tab[country]:
+            if tab[country].open:
                 import overview
                 overview.page_country(country, facts_db)
 
-    with tabs[4]:
-        if tabs[4].open:
+    with tab["Summary"]:
+        if tab["Summary"].open:
+            import overview
+            overview.page_summary(facts_db)
+
+    with tab["Forecast & execution"]:
+        if tab["Forecast & execution"].open:
             st.markdown("<h2>Forecast &amp; execution</h2>", unsafe_allow_html=True)
             import region_views
             region_views.page_regions(facts_db=facts_db, ui=dict(
@@ -1260,8 +1260,8 @@ def main():
                 blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
             ))
 
-    with tabs[5]:
-        if tabs[5].open:
+    with tab["Legacy views"]:
+        if tab["Legacy views"].open:
             # The original per-region pages, read from the Southport workbook and the Brazil database.
             if file_source is None:
                 uploaded = st.file_uploader(DATA_FILENAME, type=["xlsx"], help="Upload the Vessel Lineup Excel file to load these views")
