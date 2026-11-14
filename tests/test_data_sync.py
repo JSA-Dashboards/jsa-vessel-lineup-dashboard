@@ -182,3 +182,56 @@ def test_cached_loaders_key_on_the_file_time(fname):
                     seen += 1
                     assert not a.arg.startswith("_"), f"{fname}:{fn.name}({a.arg}) is not part of the cache key"
     assert seen >= 3
+
+
+# ── private data repo: an optional read-only token, sent only to GitHub ───────
+
+RAW = "https://raw.githubusercontent.com/JSA-Dashboards/jsa-vessel-lineup-dashboard/master/"
+
+
+def test_no_token_means_anonymous_requests_exactly_as_before(monkeypatch):
+    monkeypatch.delenv("VESSEL_DATA_TOKEN", raising=False)
+    assert ds._auth_headers(RAW) == {}
+
+
+def test_a_configured_token_is_sent_to_github_raw_only(monkeypatch):
+    monkeypatch.setenv("VESSEL_DATA_TOKEN", "  readonly-token  ")
+    assert ds._auth_headers(RAW + "facts.db") == {"Authorization": "token readonly-token"}
+    for other in ("http://127.0.0.1:8000/", "https://example.com/x", "https://raw.githubusercontent.com.evil.io/x"):
+        assert ds._auth_headers(other) == {}, other                  # never leaks the token to another host
+
+
+def test_fetch_one_carries_the_token_in_its_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("VESSEL_DATA_TOKEN", "tok123")
+    seen = {}
+
+    class R:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise OSError("stop here")
+
+    def fake_get(url, headers=None, **k):
+        seen["url"], seen["headers"] = url, headers
+        return R()
+
+    import requests
+    monkeypatch.setattr(requests, "get", fake_get)
+    info = ds.fetch_one("facts.db", str(tmp_path), base_url=RAW, cache_dir=str(tmp_path / "c"))
+    assert seen["headers"]["Authorization"] == "token tok123" and seen["headers"]["User-Agent"] == "jsa-vessel-lineup-dashboard"
+    assert info["source"] == "bundled"                               # the failure still falls back safely
+
+
+def test_the_token_is_never_written_to_the_cache_metadata(monkeypatch, tmp_path):
+    monkeypatch.setenv("VESSEL_DATA_TOKEN", "tok-secret-value")
+    root = tmp_path / "repo"; root.mkdir()
+    make_db(str(root / "facts.db"), 3)
+    repo = Repo(str(root))
+    try:
+        info = ds.fetch_one("facts.db", str(tmp_path), base_url=repo.url, cache_dir=str(tmp_path / "c"))
+        assert info["source"] == "remote"
+    finally:
+        repo.close()
+    for f in (tmp_path / "c").iterdir():
+        if f.suffix == ".json":
+            assert "tok-secret-value" not in f.read_text()

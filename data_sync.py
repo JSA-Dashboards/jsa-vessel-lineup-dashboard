@@ -9,6 +9,9 @@ app downloads the data files from the public repo at runtime instead.
 - Writes are atomic (download to a .part file, check it is really a SQLite / xlsx file, then rename) so a
   session reading the old copy never sees a half-written one and a GitHub error page is never cached.
 - If GitHub is unreachable the last downloaded copy is used, else the copy bundled with the deploy.
+- If the data repo is PRIVATE, set VESSEL_DATA_TOKEN (a read-only fine-grained token, Contents: read, for that one repo) in the
+  app's Secrets or environment; it is sent only to raw.githubusercontent.com and never to anything else. With no token the
+  requests are anonymous, exactly as before.
 - Locally (not on Cloud) nothing is fetched: the files next to app.py are used as they are. Force either
   way with VESSEL_DATA_SOURCE=remote|local.
 """
@@ -26,6 +29,26 @@ BASE_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/"
 FILES = ("brazil_lineup.db", "facts.db", "Vessel Lineup - US.xlsx")
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "vessel_lineup_data")
 MAGIC = {".db": b"SQLite format 3\x00", ".xlsx": b"PK\x03\x04"}
+
+
+def _token():
+    """VESSEL_DATA_TOKEN from the environment, else st.secrets; '' when none is set."""
+    tok = os.environ.get("VESSEL_DATA_TOKEN", "")
+    if not tok:
+        try:
+            import streamlit as st
+            tok = str(st.secrets.get("VESSEL_DATA_TOKEN", "") or "")
+        except Exception:
+            tok = ""
+    return tok.strip()
+
+
+def _auth_headers(url):
+    """An Authorization header for a raw.githubusercontent.com URL when a token is configured, else nothing."""
+    tok = _token()
+    if tok and url.startswith("https://raw.githubusercontent.com/"):
+        return {"Authorization": f"token {tok}"}
+    return {}
 
 
 def remote_enabled(app_dir):
@@ -62,7 +85,7 @@ def fetch_one(name, app_dir, base_url=None, cache_dir=None, timeout=60):
     os.makedirs(cache_dir, exist_ok=True)
     dest = os.path.join(cache_dir, name)
     meta = _read_meta(dest) if os.path.exists(dest) else {}
-    headers = {"User-Agent": "jsa-vessel-lineup-dashboard"}
+    headers = {"User-Agent": "jsa-vessel-lineup-dashboard", **_auth_headers(base_url)}
     if meta.get("etag"):
         headers["If-None-Match"] = meta["etag"]
     tmp = None
